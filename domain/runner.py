@@ -17,6 +17,7 @@ class Runner:
         self,
         runner_id: int,
         name: str,
+        email: str,
         nfc_tag: str,
         rfid_tag: str,
         state: Optional[str] = None,
@@ -25,6 +26,7 @@ class Runner:
     ):
         self.id = runner_id
         self.name = name
+        self.email = email
         self.nfc_tag = nfc_tag
         self.rfid_tag = rfid_tag
 
@@ -98,6 +100,7 @@ class Runner:
         return {
             "id": self.id,
             "name": self.name,
+            "email": self.email,
             "nfc_tag": self.nfc_tag,
             "rfid_tag": self.rfid_tag,
             "state": self.state,
@@ -110,6 +113,7 @@ class Runner:
         return cls(
             runner_id=data["id"],
             name=data["name"],
+            email=data["email"],
             nfc_tag=data["nfc_tag"],
             rfid_tag=data["rfid_tag"],
             state=data["state"],
