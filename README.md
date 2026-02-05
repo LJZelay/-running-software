@@ -33,3 +33,10 @@ flowchart TD
 
     MainMerge --> Done([Feature Complete])
 ```
+## Work Assignments
+
+Cliff - Runner Object
+Lesly - Workout Object
+Joel - csvInput within aplication layer
+
+Workout and Runner connecton in Aplication Dir and Workout Config
