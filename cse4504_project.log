@@ -1,2 +1,5 @@
 2026-02-05 10:23:57,098 - CSE4504 - INFO - Feature1 initialized with all components
 2026-02-05 10:23:57,098 - CSE4504 - INFO - Feature2 initialized (placeholder)
+2026-02-05 10:24:27,725 - CSE4504 - INFO - Executing feature: feature1
+2026-02-05 10:24:27,725 - CSE4504 - ERROR - Feature 'feature1' failed: Feature1.execute() missing 1 required positional argument: 'text'
+2026-02-05 10:24:52,944 - CSE4504 - INFO - Executing feature: feature1
