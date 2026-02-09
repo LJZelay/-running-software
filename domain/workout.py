@@ -110,13 +110,22 @@ class Workout:
             rs.check_if_ready()
             if rs.state == "RESTING":
                 rows.append({
+                    "runner_id": rs.runner.id,
                     "runner_name": rs.runner.name,
-                    "remaining_seconds": rs.get_remaining_rest_seconds(),
+                    "remaining_seconds": rs.get_remaining_restDuration(),
                     "state": rs.state
                 })
 
         rows.sort(key=lambda x: x["remaining_seconds"])
         return rows
+
+    def get_runner_counts(self) -> tuple:
+        """
+        Returns active and resting runner counts
+        """
+        active_count = sum(1 for rs in self.runnerSessions if rs.state == "RUNNING")
+        resting_count = sum(1 for rs in self.runnerSessions if rs.state == "RESTING")
+        return active_count, resting_count
 
     # ---------------------------
     # Helper functions
