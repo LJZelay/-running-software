@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional #DTO for representing the summary information of a runner in the workout.
 
 
 class RunnerSummaryView:

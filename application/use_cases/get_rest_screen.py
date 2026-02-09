@@ -5,7 +5,7 @@ from application.input_validation import validate_positive_int
 from application.dto.runner_rest_view import RunnerRestView
 
 
-class GetRestScreenUseCase:
+class GetRestScreenUseCase: #Use case for retrieving the rest screen information of all runners in a workout.
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository

@@ -1,4 +1,4 @@
-class RunnerRestView:
+class RunnerRestView: #DTO for representing the rest screen information of a runner in the workout.
     
     def __init__(
         self,

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional #Abstract base class for the WorkoutRepository, defining the interface for accessing workout data.
 
 
 class WorkoutRepository(ABC):

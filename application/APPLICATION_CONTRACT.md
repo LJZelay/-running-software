@@ -1,3 +1,5 @@
+#This is a brief explaination of what the application contract is and what it should contain. It should be a high level document that outlines the responsibilities and guarantees of the application layer, without going into implementation details. It should also include any important design decisions or constraints that the application layer must follow.
+
 # Application Layer Contract
 
 This document formalizes the guarantees, boundaries, and responsibilities of the Application Layer.
