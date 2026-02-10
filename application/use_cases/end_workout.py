@@ -22,3 +22,5 @@ class EndWorkoutUseCase:
             self.workout_repository.save(workout)
         
         return result
+
+# This use case handles the logic for ending a workout. It validates the input, retrieves the workout from the repository, calls the end method on the workout, and saves the updated workout back to the repository if it was successfully ended.
