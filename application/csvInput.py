@@ -8,11 +8,9 @@ import io
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
-from domain.runner import Runner
+from domain.runner import Runner, nfc_tag, rfid_tag, email
 from domain.workout import Workout, WorkoutConfiguration
-from domain.value_objects.nfc_id import NFCId
-from domain.value_objects.rfid_id import RFIDId
-from domain.value_objects.email import Email
+
 
 
 class CSVInputError(Exception):
