@@ -35,7 +35,7 @@ flowchart TD
 ```
 ## Work Assignments
 
-Cliff - Runner Object
+Cliff - Runner Object - 
 Lesly - Workout Object
 Joel - csvInput within aplication layer
 

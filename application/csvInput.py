@@ -334,7 +334,7 @@ class CSVInputParser:
 class CSVWorkoutImporter:
     """
     Higher-level service for importing CSV data into workout context.
-    Connects CSV parsing with workout management.
+    Connects CSV parsing with workout management
     """
     
     def __init__(self, csv_parser: CSVInputParser = None):
