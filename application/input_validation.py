@@ -1,4 +1,4 @@
-from application.exceptions import InvalidApplicationRequestError
+from application.exceptions import InvalidApplicationRequestError #Custom exception to indicate that a workout with the specified ID was not found in the repository.
 
 
 def validate_positive_int(value: int, field_name: str) -> None:

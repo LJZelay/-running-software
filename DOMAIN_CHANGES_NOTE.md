@@ -1,6 +1,7 @@
 # Project Update - Application Layer Complete - Feb 8, 2026
+# This document summarizes the recent implementation of the application layer, the minor domain changes that were necessary to support it, and the testing strategy we used to validate our design. It also includes notes on backward compatibility and future extensions.
 
-## What We Accomplished
+## What was accomplished
 
 ### 1. Implemented Complete Application Layer
 The application layer is now fully implemented and tested. This layer sits between the domain (business logic) and future controllers (UI/API).
