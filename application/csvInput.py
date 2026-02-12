@@ -206,21 +206,21 @@ class CSVInputParser:
         # Validate NFC ID
         if 'nfc_id' in row_data:
             try:
-                NFCId(row_data['nfc_id'])
+                nfc_tag(row_data['nfc_id'])
             except ValueError as e:
                 raise CSVInputError(f"Invalid NFC ID '{row_data['nfc_id']}': {str(e)}")
         
         # Validate RFID ID
         if 'rfid_id' in row_data:
             try:
-                RFIDId(row_data['rfid_id'])
+                rfid_tag(row_data['rfid_id'])
             except ValueError as e:
                 raise CSVInputError(f"Invalid RFID ID '{row_data['rfid_id']}': {str(e)}")
         
         # Validate email
         if 'email' in row_data and row_data['email']:
             try:
-                Email(row_data['email'])
+                email(row_data['email'])
             except ValueError as e:
                 raise CSVInputError(f"Invalid email '{row_data['email']}': {str(e)}")
         
@@ -271,9 +271,9 @@ class CSVInputParser:
         try:
             # Extract values
             name = row['name']
-            nfc_id = NFCId(row['nfc_id'])
-            rfid_id = RFIDId(row['rfid_id'])
-            email = Email(row['email']) if row.get('email') else None
+            nfc_id = nfc_tag(row['nfc_id'])
+            rfid_id = rfid_tag(row['rfid_id'])
+            email = email(row['email']) if row.get('email') else None
             
             # Create runner
             return Runner(
