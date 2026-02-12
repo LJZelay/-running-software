@@ -8,9 +8,9 @@ import io
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
-from domain.runner import Runner, nfc_tag, rfid_tag, email
-from domain.workout import Workout, WorkoutConfiguration
-
+from domain.runner import Runner
+from domain.runnerSession import RunnerSession
+from domain.workout import Workout
 
 
 class CSVInputError(Exception):
@@ -25,11 +25,11 @@ class CSVInputParser:
     
     # Expected CSV column headers (case-insensitive)
     EXPECTED_COLUMNS = {
-        'name', 'nfc_id', 'rfid_id', 'email', 'nfc', 'rfid',
-        'Name', 'NFC ID', 'RFID ID', 'Email', 'NFC', 'RFID'
+        'name', 'nfc_tag', 'rfid_tag', 'email', 'nfc', 'rfid',
+        'Name', 'NFC Tag', 'RFID Tag', 'Email', 'NFC', 'RFID'
     }
     
-    REQUIRED_COLUMNS = {'name', 'nfc_id', 'rfid_id'}
+    REQUIRED_COLUMNS = {'name', 'nfc_tag', 'rfid_tag'}
     
     def __init__(self, strict_validation: bool = True):
         """
@@ -127,17 +127,17 @@ class CSVInputParser:
             'Name': 'name',
             'NAME': 'name',
             
-            'nfc_id': 'nfc_id',
-            'nfc': 'nfc_id',
-            'NFC ID': 'nfc_id',
-            'NFC_ID': 'nfc_id',
-            'NFC': 'nfc_id',
+            'nfc_tag': 'nfc_tag',
+            'nfc': 'nfc_tag',
+            'NFC Tag': 'nfc_tag',
+            'NFC_TAG': 'nfc_tag',
+            'NFC': 'nfc_tag',
             
-            'rfid_id': 'rfid_id',
-            'rfid': 'rfid_id',
-            'RFID ID': 'rfid_id',
-            'RFID_ID': 'rfid_id',
-            'RFID': 'rfid_id',
+            'rfid_tag': 'rfid_tag',
+            'rfid': 'rfid_tag',
+            'RFID Tag': 'rfid_tag',
+            'RFID_TAG': 'rfid_tag',
+            'RFID': 'rfid_tag',
             
             'email': 'email',
             'Email': 'email',
@@ -145,10 +145,11 @@ class CSVInputParser:
         }
         
         for header in headers:
-            if header in header_mapping:
-                normalized[header_mapping[header]] = header
+            header_stripped = header.strip()
+            if header_stripped in header_mapping:
+                normalized[header_mapping[header_stripped]] = header_stripped
             else:
-                normalized[header] = header  # Keep original if not mapped
+                normalized[header_stripped] = header_stripped
         
         return normalized
     
@@ -188,7 +189,7 @@ class CSVInputParser:
         for std_field, orig_header in normalized_headers.items():
             if orig_header in row:
                 value = row[orig_header].strip()
-                if value:  # Only include non-empty values
+                if value:
                     processed[std_field] = value
         
         # Validate required fields
@@ -203,28 +204,29 @@ class CSVInputParser:
     
     def _validate_row_data(self, row_data: Dict[str, Any], row_num: int):
         """Validate individual field values."""
-        # Validate NFC ID
-        if 'nfc_id' in row_data:
-            try:
-                nfc_tag(row_data['nfc_id'])
-            except ValueError as e:
-                raise CSVInputError(f"Invalid NFC ID '{row_data['nfc_id']}': {str(e)}")
+        # Validate NFC tag - must be non-empty string
+        if 'nfc_tag' in row_data:
+            nfc_value = row_data['nfc_tag']
+            if not nfc_value or not isinstance(nfc_value, str):
+                raise CSVInputError(f"Invalid NFC tag: must be a non-empty string")
+            if len(nfc_value) < 4:
+                raise CSVInputError(f"NFC tag '{nfc_value}' is too short (minimum 4 characters)")
         
-        # Validate RFID ID
-        if 'rfid_id' in row_data:
-            try:
-                rfid_tag(row_data['rfid_id'])
-            except ValueError as e:
-                raise CSVInputError(f"Invalid RFID ID '{row_data['rfid_id']}': {str(e)}")
+        # Validate RFID tag - must be non-empty string
+        if 'rfid_tag' in row_data:
+            rfid_value = row_data['rfid_tag']
+            if not rfid_value or not isinstance(rfid_value, str):
+                raise CSVInputError(f"Invalid RFID tag: must be a non-empty string")
+            if len(rfid_value) < 4:
+                raise CSVInputError(f"RFID tag '{rfid_value}' is too short (minimum 4 characters)")
         
-        # Validate email
+        # Validate email format if provided
         if 'email' in row_data and row_data['email']:
-            try:
-                email(row_data['email'])
-            except ValueError as e:
-                raise CSVInputError(f"Invalid email '{row_data['email']}': {str(e)}")
+            email_value = row_data['email']
+            if '@' not in email_value or '.' not in email_value:
+                raise CSVInputError(f"Invalid email format: '{email_value}'")
         
-        # Validate name (basic validation)
+        # Validate name
         if 'name' in row_data:
             name = row_data['name']
             if len(name) < 2:
@@ -241,17 +243,18 @@ class CSVInputParser:
             
         Returns:
             List of Runner objects
-        
-        Raises:
-            CSVInputError: If data cannot be converted to Runner objects
         """
         runners = []
         errors = []
         
+        # Generate runner IDs starting from 1
+        next_runner_id = 1
+        
         for i, row in enumerate(csv_data, start=1):
             try:
-                runner = self._create_runner_from_row(row, i)
+                runner = self._create_runner_from_row(row, i, next_runner_id)
                 runners.append(runner)
+                next_runner_id += 1
             except (ValueError, CSVInputError) as e:
                 error_msg = f"Row {i}: Failed to create runner - {str(e)}"
                 if self.strict_validation:
@@ -266,65 +269,85 @@ class CSVInputParser:
         
         return runners
     
-    def _create_runner_from_row(self, row: Dict[str, Any], row_num: int) -> Runner:
+    def _create_runner_from_row(self, row: Dict[str, Any], row_num: int, runner_id: int) -> Runner:
         """Create a Runner object from a parsed row."""
         try:
-            # Extract values
             name = row['name']
-            nfc_id = nfc_tag(row['nfc_id'])
-            rfid_id = rfid_tag(row['rfid_id'])
-            email = email(row['email']) if row.get('email') else None
+            nfc_tag = row['nfc_tag']
+            rfid_tag = row['rfid_tag']
+            email_value = row.get('email', '')
             
-            # Create runner
             return Runner(
+                runner_id=runner_id,
                 name=name,
-                nfc_id=nfc_id,
-                rfid_id=rfid_id,
-                email=email
+                email=email_value,
+                nfc_tag=nfc_tag,
+                rfid_tag=rfid_tag
             )
         except KeyError as e:
             raise CSVInputError(f"Missing field: {e}")
-        except ValueError as e:
+        except Exception as e:
             raise CSVInputError(str(e))
     
-    def validate_csv_for_workout(self, csv_data: List[Dict[str, Any]], workout_config: WorkoutConfiguration) -> Tuple[bool, List[str]]:
+    def create_runner_sessions_from_csv(self, 
+                                        csv_data: List[Dict[str, Any]], 
+                                        rest_duration: int = 60) -> List[RunnerSession]:
         """
-        Validate CSV data for a specific workout configuration.
+        Create RunnerSession objects from parsed CSV data.
+        
+        Args:
+            csv_data: List of dictionaries from parse_csv_file/string
+            rest_duration: Default rest duration in seconds
+            
+        Returns:
+            List of RunnerSession objects
+        """
+        runners = self.create_runners_from_csv(csv_data)
+        runner_sessions = []
+        
+        for runner in runners:
+            runner_session = RunnerSession(
+                runner=runner,
+                restDuration=rest_duration,
+                state="NOT_STARTED"
+            )
+            runner_sessions.append(runner_session)
+        
+        return runner_sessions
+    
+    def validate_csv_for_duplicates(self, csv_data: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        """
+        Validate CSV data for duplicate NFC/RFID tags within the file.
         
         Args:
             csv_data: Parsed CSV data
-            workout_config: Workout configuration to validate against
             
         Returns:
             Tuple of (is_valid, list_of_errors)
         """
         errors = []
         
-        # Check if there are runners
         if not csv_data:
             errors.append("CSV file contains no runner data")
             return False, errors
         
-        # Check for duplicate NFC/RFID IDs
-        nfc_ids = set()
-        rfid_ids = set()
+        nfc_tags = set()
+        rfid_tags = set()
         
         for i, row in enumerate(csv_data, start=1):
-            # Check for duplicate NFC IDs
-            if 'nfc_id' in row:
-                nfc_id = row['nfc_id']
-                if nfc_id in nfc_ids:
-                    errors.append(f"Row {i}: Duplicate NFC ID: {nfc_id}")
+            if 'nfc_tag' in row:
+                nfc_tag = row['nfc_tag']
+                if nfc_tag in nfc_tags:
+                    errors.append(f"Row {i}: Duplicate NFC tag: {nfc_tag}")
                 else:
-                    nfc_ids.add(nfc_id)
+                    nfc_tags.add(nfc_tag)
             
-            # Check for duplicate RFID IDs
-            if 'rfid_id' in row:
-                rfid_id = row['rfid_id']
-                if rfid_id in rfid_ids:
-                    errors.append(f"Row {i}: Duplicate RFID ID: {rfid_id}")
+            if 'rfid_tag' in row:
+                rfid_tag = row['rfid_tag']
+                if rfid_tag in rfid_tags:
+                    errors.append(f"Row {i}: Duplicate RFID tag: {rfid_tag}")
                 else:
-                    rfid_ids.add(rfid_id)
+                    rfid_tags.add(rfid_tag)
         
         return len(errors) == 0, errors
 
@@ -332,14 +355,16 @@ class CSVInputParser:
 class CSVWorkoutImporter:
     """
     Higher-level service for importing CSV data into workout context.
-    Connects CSV parsing with workout management
+    Connects CSV parsing with workout management.
     """
     
-    def __init__(self, csv_parser: CSVInputParser = None):
+    def __init__(self, csv_parser: CSVInputParser = None, default_rest_duration: int = 60):
         self.csv_parser = csv_parser or CSVInputParser()
+        self.default_rest_duration = default_rest_duration
         self.imported_runners: List[Runner] = []
+        self.imported_sessions: List[RunnerSession] = []
     
-    def import_roster_to_workout(self, workout: Workout, csv_file_path: str) -> Tuple[Workout, List[Runner]]:
+    def import_roster_to_workout(self, workout: Workout, csv_file_path: str) -> Tuple[Workout, List[RunnerSession]]:
         """
         Import runners from CSV file into a workout.
         
@@ -348,75 +373,106 @@ class CSVWorkoutImporter:
             csv_file_path: Path to CSV roster file
             
         Returns:
-            Tuple of (updated_workout, list_of_imported_runners)
-        
-        Raises:
-            CSVInputError: If import fails
+            Tuple of (updated_workout, list_of_imported_runner_sessions)
         """
         # Parse CSV file
         csv_data = self.csv_parser.parse_csv_file(csv_file_path)
         
-        # Validate against workout
-        if workout.configuration:
-            is_valid, errors = self.csv_parser.validate_csv_for_workout(csv_data, workout.configuration)
-            if not is_valid:
-                raise CSVInputError(f"CSV validation failed: {', '.join(errors)}")
+        # Validate for duplicates within the CSV file
+        is_valid, errors = self.csv_parser.validate_csv_for_duplicates(csv_data)
+        if not is_valid:
+            raise CSVInputError(f"CSV validation failed: {', '.join(errors)}")
         
-        # Create runners from CSV data
-        runners = self.csv_parser.create_runners_from_csv(csv_data)
+        # Create runner sessions from CSV data
+        runner_sessions = self.csv_parser.create_runner_sessions_from_csv(
+            csv_data, self.default_rest_duration
+        )
         
-        # Add runners to workout
-        added_runners = []
-        for runner in runners:
+        # Add runner sessions to workout
+        added_sessions = []
+        for runner_session in runner_sessions:
             try:
-                workout.add_runner(runner)
-                added_runners.append(runner)
+                # Check for duplicate NFC in existing workout
+                existing_nfc = workout._find_runner_session_by_nfc(runner_session.runner.nfc_tag)
+                if existing_nfc:
+                    if self.csv_parser.strict_validation:
+                        raise CSVInputError(f"Runner with NFC tag {runner_session.runner.nfc_tag} already exists")
+                    else:
+                        print(f"Warning: Skipping runner {runner_session.runner.name} - NFC tag already exists")
+                        continue
+                
+                # Check for duplicate RFID in existing workout
+                existing_rfid = workout._find_runner_session_by_rfid(runner_session.runner.rfid_tag)
+                if existing_rfid:
+                    if self.csv_parser.strict_validation:
+                        raise CSVInputError(f"Runner with RFID tag {runner_session.runner.rfid_tag} already exists")
+                    else:
+                        print(f"Warning: Skipping runner {runner_session.runner.name} - RFID tag already exists")
+                        continue
+                
+                # Add to workout
+                workout.add_runner_session(runner_session)
+                added_sessions.append(runner_session)
+                self.imported_runners.append(runner_session.runner)
+                
             except ValueError as e:
                 if self.csv_parser.strict_validation:
-                    raise CSVInputError(f"Failed to add runner {runner.name}: {str(e)}")
+                    raise CSVInputError(f"Failed to add runner {runner_session.runner.name}: {str(e)}")
                 else:
-                    print(f"Warning: Skipping runner {runner.name} - {str(e)}")
+                    print(f"Warning: Skipping runner {runner_session.runner.name} - {str(e)}")
         
-        self.imported_runners = added_runners
-        return workout, added_runners
+        self.imported_sessions = added_sessions
+        return workout, added_sessions
     
-    def import_roster_from_string(self, workout: Workout, csv_string: str) -> Tuple[Workout, List[Runner]]:
+    def import_roster_from_string(self, workout: Workout, csv_string: str) -> Tuple[Workout, List[RunnerSession]]:
         """
         Import runners from CSV string into a workout.
         
         Args:
             workout: Workout to import runners into
             csv_string: CSV content as string
-            
-        Returns:
-            Tuple of (updated_workout, list_of_imported_runners)
         """
-        # Parse CSV string
         csv_data = self.csv_parser.parse_csv_string(csv_string)
         
-        # Validate against workout
-        if workout.configuration:
-            is_valid, errors = self.csv_parser.validate_csv_for_workout(csv_data, workout.configuration)
-            if not is_valid:
-                raise CSVInputError(f"CSV validation failed: {', '.join(errors)}")
+        is_valid, errors = self.csv_parser.validate_csv_for_duplicates(csv_data)
+        if not is_valid:
+            raise CSVInputError(f"CSV validation failed: {', '.join(errors)}")
         
-        # Create runners from CSV data
-        runners = self.csv_parser.create_runners_from_csv(csv_data)
+        runner_sessions = self.csv_parser.create_runner_sessions_from_csv(
+            csv_data, self.default_rest_duration
+        )
         
-        # Add runners to workout
-        added_runners = []
-        for runner in runners:
+        added_sessions = []
+        for runner_session in runner_sessions:
             try:
-                workout.add_runner(runner)
-                added_runners.append(runner)
+                existing_nfc = workout._find_runner_session_by_nfc(runner_session.runner.nfc_tag)
+                if existing_nfc:
+                    if self.csv_parser.strict_validation:
+                        raise CSVInputError(f"Runner with NFC tag {runner_session.runner.nfc_tag} already exists")
+                    else:
+                        print(f"Warning: Skipping runner {runner_session.runner.name} - NFC tag already exists")
+                        continue
+                
+                existing_rfid = workout._find_runner_session_by_rfid(runner_session.runner.rfid_tag)
+                if existing_rfid:
+                    if self.csv_parser.strict_validation:
+                        raise CSVInputError(f"Runner with RFID tag {runner_session.runner.rfid_tag} already exists")
+                    else:
+                        print(f"Warning: Skipping runner {runner_session.runner.name} - RFID tag already exists")
+                        continue
+                
+                workout.add_runner_session(runner_session)
+                added_sessions.append(runner_session)
+                self.imported_runners.append(runner_session.runner)
+                
             except ValueError as e:
                 if self.csv_parser.strict_validation:
-                    raise CSVInputError(f"Failed to add runner {runner.name}: {str(e)}")
+                    raise CSVInputError(f"Failed to add runner {runner_session.runner.name}: {str(e)}")
                 else:
-                    print(f"Warning: Skipping runner {runner.name} - {str(e)}")
+                    print(f"Warning: Skipping runner {runner_session.runner.name} - {str(e)}")
         
-        self.imported_runners = added_runners
-        return workout, added_runners
+        self.imported_sessions = added_sessions
+        return workout, added_sessions
     
     def export_workout_roster_to_csv(self, workout: Workout) -> str:
         """
@@ -428,23 +484,22 @@ class CSVWorkoutImporter:
         Returns:
             CSV content as string
         """
-        if not workout.runners:
+        if not workout.runnerSessions:
             return ""
         
-        # Prepare CSV data
-        fieldnames = ['name', 'nfc_id', 'rfid_id', 'email']
+        fieldnames = ['name', 'nfc_tag', 'rfid_tag', 'email']
         rows = []
         
-        for runner in workout.runners:
+        for runner_session in workout.runnerSessions:
+            runner = runner_session.runner
             row = {
                 'name': runner.name,
-                'nfc_id': str(runner.nfc_id),
-                'rfid_id': str(runner.rfid_id),
-                'email': str(runner.email) if runner.email else ''
+                'nfc_tag': runner.nfc_tag,
+                'rfid_tag': runner.rfid_tag,
+                'email': runner.email if runner.email else ''
             }
             rows.append(row)
         
-        # Write to string
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
@@ -461,17 +516,16 @@ class CSVWorkoutImporter:
             file_path: Path to save CSV file
         """
         csv_content = self.export_workout_roster_to_csv(workout)
-        
         with open(file_path, 'w', newline='', encoding='utf-8') as file:
             file.write(csv_content)
 
 
 # Example CSV content for testing
-EXAMPLE_CSV_CONTENT = """name,nfc_id,rfid_id,email
-John Doe,A1B2C3D4,E5F6A7B8C9D0,john.doe@example.com
-Jane Smith,B2C3D4E5,F6A7B8C9D0E1,jane.smith@example.com
-Bob Johnson,C3D4E5F6,A7B8C9D0E1F2,bob.johnson@example.com
-Alice Wilson,D4E5F6A7,B8C9D0E1F2A3,alice.wilson@example.com
+EXAMPLE_CSV_CONTENT = """name,nfc_tag,rfid_tag,email
+John Doe,NFC001,RFID001,john.doe@example.com
+Jane Smith,NFC002,RFID002,jane.smith@example.com
+Bob Johnson,NFC003,RFID003,bob.johnson@example.com
+Alice Wilson,NFC004,RFID004,alice.wilson@example.com
 """
 
 
@@ -481,14 +535,13 @@ def demonstrate_csv_parsing():
     print("CSV INPUT PARSER DEMONSTRATION")
     print("=" * 60)
     
-    # Create parser
     parser = CSVInputParser(strict_validation=False)
     
     print("\n1. PARSING EXAMPLE CSV STRING:")
     try:
         csv_data = parser.parse_csv_string(EXAMPLE_CSV_CONTENT)
         print(f"  Successfully parsed {len(csv_data)} rows")
-        for i, row in enumerate(csv_data[:2], 1):  # Show first 2 rows
+        for i, row in enumerate(csv_data[:2], 1):
             print(f"  Row {i}: {row}")
         if len(csv_data) > 2:
             print(f"  ... and {len(csv_data) - 2} more rows")
@@ -499,69 +552,38 @@ def demonstrate_csv_parsing():
     try:
         runners = parser.create_runners_from_csv(csv_data)
         print(f"  Created {len(runners)} runner objects:")
-        for runner in runners[:2]:  # Show first 2 runners
-            print(f"    - {runner.name}: NFC={runner.nfc_id}, RFID={runner.rfid_id}")
+        for runner in runners[:2]:
+            print(f"    - {runner.name}: NFC={runner.nfc_tag}, RFID={runner.rfid_tag}")
         if len(runners) > 2:
             print(f"    ... and {len(runners) - 2} more")
     except CSVInputError as e:
         print(f"  Error: {e}")
     
-    print("\n3. TESTING VALIDATION:")
-    # Test invalid CSV
-    invalid_csv = """name,nfc_id,rfid_id,email
-John Doe,INVALID_NFC,E5F6A7B8C9D0,john@example.com
-,J,K,
-Valid Person,F6A7B8C9D0E1,G7H8I9J0K1L2,valid@example.com
+    print("\n3. CREATING RUNNER SESSIONS FROM CSV:")
+    try:
+        runner_sessions = parser.create_runner_sessions_from_csv(csv_data, rest_duration=60)
+        print(f"  Created {len(runner_sessions)} runner sessions:")
+        for session in runner_sessions[:2]:
+            print(f"    - {session.runner.name}: Rest={session.restDuration}s, State={session.state}")
+        if len(runner_sessions) > 2:
+            print(f"    ... and {len(runner_sessions) - 2} more")
+    except CSVInputError as e:
+        print(f"  Error: {e}")
+    
+    print("\n4. VALIDATING DUPLICATES:")
+    duplicate_csv = """name,nfc_tag,rfid_tag,email
+John Doe,NFC001,RFID001,john@example.com
+Jane Smith,NFC001,RFID002,jane@example.com
 """
-    
-    print("  Testing invalid CSV data:")
     try:
-        invalid_data = parser.parse_csv_string(invalid_csv)
-        print(f"  Parsed {len(invalid_data)} rows (some may be filtered)")
-        
-        # Try to create runners
-        runners = parser.create_runners_from_csv(invalid_data)
-        print(f"  Successfully created {len(runners)} runners from invalid data")
-        
-        if parser.validation_errors:
-            print("  Validation errors:")
-            for error in parser.validation_errors[:3]:  # Show first 3 errors
+        duplicate_data = parser.parse_csv_string(duplicate_csv)
+        is_valid, errors = parser.validate_csv_for_duplicates(duplicate_data)
+        print(f"  Duplicate validation: {'PASSED' if is_valid else 'FAILED'}")
+        if errors:
+            for error in errors:
                 print(f"    - {error}")
-            if len(parser.validation_errors) > 3:
-                print(f"    ... and {len(parser.validation_errors) - 3} more")
-        
-    except CSVInputError as e:
-        print(f"  Error (expected): {e}")
-    
-    print("\n4. WORKOUT IMPORT DEMONSTRATION:")
-    # Create a sample workout
-    config = WorkoutConfiguration(
-        name="Test Workout",
-        interval_distance=400,
-        rest_time=60,
-        interval_count=8
-    )
-    
-    workout = Workout(configuration=config)
-    
-    # Import roster
-    importer = CSVWorkoutImporter()
-    try:
-        updated_workout, imported_runners = importer.import_roster_from_string(
-            workout, EXAMPLE_CSV_CONTENT
-        )
-        print(f"  Imported {len(imported_runners)} runners into workout")
-        print(f"  Workout now has {len(updated_workout.runners)} total runners")
-    except CSVInputError as e:
-        print(f"  Import error: {e}")
-    
-    print("\n5. CSV EXPORT DEMONSTRATION:")
-    if workout.runners:
-        csv_export = importer.export_workout_roster_to_csv(workout)
-        print("  Exported CSV (first few lines):")
-        lines = csv_export.split('\n')[:4]  # Show header + first 3 rows
-        for line in lines:
-            print(f"    {line}")
+    except Exception as e:
+        print(f"  Error: {e}")
     
     print("\n" + "=" * 60)
     print("DEMONSTRATION COMPLETE")
