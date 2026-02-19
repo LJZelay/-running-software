@@ -1,42 +1,111 @@
 # CSE 4504 Team Project
 
-## GitHub Workflow
-During the development of this project, the following workflow will be used for each stage (feature). The diagram shows the workflow for feature_1. For each subsequent feature, the same workflow will be used (replacing feature_1 with a different feature number or name).
-```mermaid
-flowchart TD
-    Start([Start Project]) --> InitFeature[Create 'feature_1' branch from main]
-    subgraph Team_Start [Team Design Work]
-    InitFeature --> Design[Design interfaces, commit and push to 'feature_1']
-    Design --> DivideTasks[Divide implementation work among teammates. Update README.md file with Work Assignment section, specifying individual implementation responsibilities.]
-    end
+## Work Assignments 
 
-    subgraph Indiv_Work [Individual Development Work]
-    DivideTasks --> BranchInd[Create individual task branch]
-    BranchInd --> Implement[Implement assigned components]
-    Implement --> PR_Ind[Open PR from individual task branch to 'feature_1']
-    end
-    style Indiv_Work fill:#96C9F2
-
-    subgraph Team Integration Work
-    Review_Ind -- Changes Needed --> Implement
-    PR_Ind --> Review_Ind{Team Review}
-    Review_Ind -- Approved --> Merge_Ind[Merge to 'feature_1']    
-    Merge_Ind --> Pull[Pull updated 'feature_1']
-    Pull --> Test[Run integration tests]
-    Test --> Fix{Bugs Found?}
-    Fix -- Yes --> FixCommit[Commit fixes to 'feature_1']
-    FixCommit --> Test
-    Fix -- No --> FinalPR[Open PR from feature_1 to 'main']
-    FinalPR --> Review_Final{Final Review}
-    Review_Final -- Approved --> MainMerge[Merge to 'main']
-    end
-
-    MainMerge --> Done([Feature Complete])
-```
-## Work Assignments
-
-Cliff - Runner Object - 
-Lesly - Workout Object
+Feature 1 implementation:
+Cliff - Runner Object - Domain Layer
+Lesly - Workout Object - Application Layer
 Joel - csvInput within aplication layer
 
-Workout and Runner connecton in Aplication Dir and Workout Config
+CLI implementation:
+Lesly - WorkoutService - Application Layer
+Joel - WorkoutController - Controller Layer
+cliff - check for any errors -User experience and testing
+
+## Developer's Guide
+
+### Prerequisites
+
+This project requires Python 3.7 or higher. No external dependencies are needed—the application uses only Python standard libraries.
+
+To check your Python version:
+```bash
+python --version
+```
+
+### Installation
+
+1. **Clone the repository** (if you haven't already):
+   ```bash
+   git clone <repository-url>
+   cd team-project-team4
+   ```
+
+2. **No additional dependencies to install** - The project uses only Python standard libraries:
+   - `datetime` - For timestamp handling
+   - `typing` - For type hints
+   - `abc` - For abstract base classes
+
+### Running the Application
+
+#### Main Command Line Application
+
+To run the main demonstration program with hardcoded use case examples:
+
+```bash
+python main.py
+```
+
+This will execute all five use cases in sequence and display their outputs:
+- Start Workout
+- Scan NFC Tag (runner starts interval)
+- Scan RFID Tag (lap detection)
+- Get Rest Screen (view resting runners)
+- End Workout
+
+**Expected Output:** A formatted demonstration showing input parameters and return values for each use case.
+
+#### Running Tests
+
+To run the happy path integration test:
+
+```bash
+python -m application.test_happy_path
+```
+
+Or use the quick test command:
+```bash
+python -c "import sys; sys.path.insert(0, '.'); from application.test_happy_path import test_happy_path_interval_workout; test_happy_path_interval_workout(); print('✓ Happy path test PASSED')"
+```
+
+**Expected Output:** `✓ Happy path test PASSED`
+
+### Project Structure
+
+```
+team-project-team4/
+├── main.py                     # Main entry point (demonstration)
+├── domain/                     # Business logic layer
+│   ├── runner.py              # Runner entity
+│   ├── runnerSession.py       # Runner session entity
+│   └── workout.py             # Workout entity
+├── application/               # Application/use case layer
+│   ├── use_cases/            # Use case implementations
+│   │   ├── start_workout.py
+│   │   ├── scan_nfc.py
+│   │   ├── scan_rfid.py
+│   │   ├── get_rest_screen.py
+│   │   └── end_workout.py
+│   ├── dto/                  # Data transfer objects
+│   ├── repositories/         # Repository interfaces & implementations
+│   ├── exceptions.py         # Application-level exceptions
+│   ├── input_validation.py   # Input validation utilities
+│   └── test_happy_path.py   # Integration tests
+├── controller/               # Controller layer (future implementation)
+└── externalInterface/        # External interfaces (future implementation)
+```
+
+### Troubleshooting
+
+**Import Errors:**
+- Make sure you're running commands from the project root directory
+- Python must be able to find the project modules (current directory should be in `sys.path`)
+
+**Python Version Issues:**
+- Ensure you're using Python 3.7+ (required for type hints and dataclass features)
+
+### Additional Documentation
+
+- [Application Contract](application/APPLICATION_CONTRACT.md) - Application layer responsibilities and guarantees
+- [Domain Changes Note](DOMAIN_CHANGES_NOTE.md) - Recent domain implementation details
+- Layer-specific READMEs in each directory (`domain/`, `application/`, etc.) and also specific of what was implemented in application.
