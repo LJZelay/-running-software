@@ -214,3 +214,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Prevent commiting generated CSV exports, demo outputs, etc.
+outputs/
+exports/
+tmp/
+temp/
+data/
+# *.csv (not too sure about this one)

@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import List, Optional
 from domain.runner import Runner
+"""from datetime import datetime"""
 
+"""def _parse_ts(ts: str) -> datetime:
+    "return datetime.fromisoformat(ts)"""
 
 class RunnerSession:
     """

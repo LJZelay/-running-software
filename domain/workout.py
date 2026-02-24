@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 from domain.runnerSession import RunnerSession
-
+from domain.exceptions import DuplicateRunnerError #from exception file
 
 class Workout:
     """
@@ -51,6 +51,8 @@ class Workout:
         """Coach activates workout, system begins accepting NFC/RFID events."""
         if self.status != "NOT_STARTED":
             return False
+
+
         self.status = "ACTIVE"
         self.startTime = datetime.now().isoformat()
         return True
@@ -66,6 +68,18 @@ class Workout:
     def add_runner_session(self, rs: RunnerSession) -> bool:
         if self.status != "NOT_STARTED":
             return False
+
+        # checks for duplicates in sessions (name, nfc, rfid)
+        # raises DuplicateRunnerError if found
+        for existing in self.runnerSessions:
+            if existing.runner.id == rs.runner.id:
+                raise DuplicateRunnerError(f"Runner with id {rs.runner.id} already exists in this workout.")
+
+            if existing.runner.nfc_tag == rs.runner.nfc_tag:
+                raise DuplicateRunnerError(f"Runner with NFC tag {rs.runner.nfc_tag} already exists in this workout.")
+
+            if existing.runner.rfid_tag == rs.runner.rfid_tag:
+                raise DuplicateRunnerError(f"Runner with RFID tag {rs.runner.rfid_tag} already exists in this workout.")
         self.runnerSessions.append(rs)
         return True
 
