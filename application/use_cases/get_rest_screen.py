@@ -29,12 +29,13 @@ class GetRestScreenUseCase:
             view = RunnerRestView(
                 runner_id=session.runner.id,
                 runner_name=session.runner.name,
-                remaining_rest_seconds=session.get_remaining_rest_seconds(),
+                # Change this from session's job to some UI logic
+                # remaining_rest_seconds=session.get_remaining_rest_seconds(),
                 is_ready_to_run=session.is_ready()
             )
             views.append(view)
         
-        # Sort by remaining seconds
-        views.sort(key=lambda v: v.remaining_rest_seconds)
+        # Sort by remaining seconds, uncomment when doable
+        # views.sort(key=lambda v: v.remaining_rest_seconds)
         
         return views
