@@ -1,22 +1,22 @@
 """
 Use case for adding a runner to a workout.
-Simple implementation that works with existing domain models.
+Implementation uses domain entity abstraction instead of inspecting state.
 """
 from typing import Optional
 from domain.runner import Runner
 from domain.runnerSession import RunnerSession
-from domain.workout import Workout
-from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
-from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
+from application.repositories.workout_repository import WorkoutRepository
+from application.exceptions import WorkoutNotFoundError
+from application.input_validation import validate_positive_int
 
 
 class AddRunnerToWorkoutUseCase:
     """Use case for adding a runner to an existing workout."""
     
-    def __init__(self, workout_repository: InMemoryWorkoutRepository):
+    def __init__(self, workout_repository: WorkoutRepository):
         self.workout_repository = workout_repository
     
-    def execute(self, workout_id: int, runner: Runner, rest_duration: int = 60) -> Workout:
+    def execute(self, workout_id: int, runner: Runner, rest_duration: int = 60) -> bool:
         """
         Add a runner to a workout by creating a RunnerSession.
         
@@ -26,59 +26,54 @@ class AddRunnerToWorkoutUseCase:
             rest_duration: Rest time in seconds (default: 60)
         
         Returns:
-            Updated Workout object
+            True if successfully added, False otherwise
         
         Raises:
             WorkoutNotFoundError: If workout doesn't exist
-            InvalidApplicationRequestError: If runner cannot be added
         """
-        # Validate inputs
-        if not isinstance(workout_id, int) or workout_id <= 0:
-            raise InvalidApplicationRequestError("workout_id must be a positive integer")
+        validate_positive_int(workout_id, "workout_id")
         
         if not runner:
-            raise InvalidApplicationRequestError("Runner cannot be None")
+            raise ValueError("Runner cannot be None")
         
         if rest_duration < 0:
-            raise InvalidApplicationRequestError("rest_duration cannot be negative")
+            raise ValueError("rest_duration cannot be negative")
         
         # Get workout
         workout = self.workout_repository.get_by_id(workout_id)
         if not workout:
             raise WorkoutNotFoundError(f"Workout with ID {workout_id} not found")
         
-        # Check if workout already started
-        if workout.status != "NOT_STARTED":
-            raise InvalidApplicationRequestError(f"Cannot add runner: workout is {workout.status}")
+        # Check if workout already started - delegate to domain
+        if not workout.is_not_started():
+            return False
         
         # Check for duplicate NFC tag
         existing = workout._find_runner_session_by_nfc(runner.nfc_tag)
         if existing:
-            raise InvalidApplicationRequestError(f"Runner with NFC tag {runner.nfc_tag} already exists")
+            raise ValueError(f"Runner with NFC tag {runner.nfc_tag} already exists")
         
         # Check for duplicate RFID tag
         existing = workout._find_runner_session_by_rfid(runner.rfid_tag)
         if existing:
-            raise InvalidApplicationRequestError(f"Runner with RFID tag {runner.rfid_tag} already exists")
+            raise ValueError(f"Runner with RFID tag {runner.rfid_tag} already exists")
         
         # Create runner session and add to workout
         runner_session = RunnerSession(
             runner=runner,
-            restDuration=rest_duration,
-            state="NOT_STARTED"
+            restDuration=rest_duration
         )
         
-        workout.add_runner_session(runner_session)
+        added = workout.add_runner_session(runner_session)
         
-        # Save updated workout
-        self.workout_repository.save(workout)
+        if added:
+            self.workout_repository.save(workout)
         
-        return workout
+        return added
     
     def execute_by_nfc(self, workout_id: int, nfc_tag: str) -> Optional[Runner]:
         """
         Find a runner by NFC tag without adding them.
-        Used for Option 2: Add athlete to group (verification).
         
         Args:
             workout_id: ID of the workout
@@ -90,6 +85,8 @@ class AddRunnerToWorkoutUseCase:
         Raises:
             WorkoutNotFoundError: If workout doesn't exist
         """
+        validate_positive_int(workout_id, "workout_id")
+        
         workout = self.workout_repository.get_by_id(workout_id)
         if not workout:
             raise WorkoutNotFoundError(f"Workout with ID {workout_id} not found")

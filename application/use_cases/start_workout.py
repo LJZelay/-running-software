@@ -3,7 +3,8 @@ from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int
 
 
-class StartWorkoutUseCase: #This use case handles the logic for starting a workout. It validates the input, retrieves the workout from the repository, calls the start method on the workout, and saves the updated workout back to the repository if it was successfully started.
+class StartWorkoutUseCase:
+    """Use case for starting a workout."""
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository
