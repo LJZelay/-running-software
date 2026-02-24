@@ -5,7 +5,8 @@ from application.dto.workout_status_view import WorkoutStatusView
 from application.mappers import WorkoutStatusMapper
 
 
-class ScanNFCUseCase: #Use case for handling the logic when an NFC tag is scanned to start a runner's activity in a workout. It validates the input, retrieves the workout, records the NFC start, saves the workout, and returns the updated workout status.
+class ScanNFCUseCase:
+    """Use case for handling NFC tag scans to start a runner's interval."""
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository

@@ -1,6 +1,7 @@
 from domain.runner import Runner
 from domain.runnerSession import RunnerSession
 from domain.workout import Workout
+from domain.workout_state import WorkoutState
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
 from application.use_cases.start_workout import StartWorkoutUseCase
 from application.use_cases.scan_nfc import ScanNFCUseCase
@@ -8,7 +9,7 @@ from application.use_cases.scan_rfid import ScanRFIDUseCase
 from application.use_cases.get_rest_screen import GetRestScreenUseCase
 from application.use_cases.end_workout import EndWorkoutUseCase
 
-# This test simulates a happy path scenario for an interval workout. It creates a workout with two runners, starts the workout, simulates NFC and RFID scans for one runner, checks the rest screen data, ends the workout, and verifies that the workout status is updated to COMPLETED. Assertions are used throughout to ensure that the expected outcomes are met at each step.
+# This test simulates a happy path scenario for an interval workout. It creates a workout with two runners, starts the workout, simulates NFC and RFID scans for one runner, checks the rest screen data, ends the workout, and verifies that the workout status is updated to COMPLETED.
 
 def test_happy_path_interval_workout() -> None:
     runner1 = Runner(
@@ -50,7 +51,7 @@ def test_happy_path_interval_workout() -> None:
     scan_nfc_use_case = ScanNFCUseCase(repository)
     status1 = scan_nfc_use_case.execute(100, "NFC001", "2026-02-08T10:00:00")
     assert status1.workout_id == 100
-    assert status1.workout_state == "ACTIVE"
+    assert status1.workout_state == WorkoutState.ACTIVE.value
     assert status1.active_runner_count == 1
     assert status1.resting_runner_count == 0
     
@@ -79,7 +80,7 @@ def test_happy_path_interval_workout() -> None:
     assert ended == True
     
     final_workout = repository.get_by_id(100)
-    assert final_workout.status == "COMPLETED"
+    assert final_workout.status == WorkoutState.COMPLETED
 
 
 if __name__ == "__main__":
@@ -90,3 +91,4 @@ if __name__ == "__main__":
         print(f"✗ Happy path test FAILED: {e}")
         import traceback
         traceback.print_exc()
+
