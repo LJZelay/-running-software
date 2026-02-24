@@ -16,7 +16,7 @@ Menu Options:
 
 import sys
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Set
 from datetime import datetime
 
 # Add project root to path
@@ -29,46 +29,41 @@ from domain.workout import Workout
 
 # Application layer imports
 from application.csvInput import CSVWorkoutImporter, CSVInputParser, CSVInputError
-from application.use_cases.add_runner_to_workout import AddRunnerToWorkoutUseCase
-from application.use_cases.group_start import GroupStartUseCase
-from application.use_cases.get_rest_screen import GetRestScreenUseCase
-from application.use_cases.get_running_screen import GetRunningScreenUseCase
 
 # Repository
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
 
-# DTOs
-from application.dto.runner_rest_view import RunnerRestView
-from application.dto.runner_running_view import RunnerRunningView
-from application.dto.workout_status_view import WorkoutStatusView
-
-# Exceptions
-from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
+# Use Cases that exist
+from application.use_cases.start_workout import StartWorkoutUseCase
+from application.use_cases.scan_nfc import ScanNFCUseCase
+from application.use_cases.scan_rfid import ScanRFIDUseCase
+from application.use_cases.get_rest_screen import GetRestScreenUseCase
+from application.use_cases.end_workout import EndWorkoutUseCase
 
 
 class IntervalTrainingCLI:
     """
     Command Line Interface for Interval Training Software.
-    Assumes default workout: 400m intervals, 60 seconds rest time, 1 lap per interval.
     """
     
     # Default workout configuration
     DEFAULT_WORKOUT_ID = 1
     DEFAULT_INTERVAL_DISTANCE = 400
-    DEFAULT_LAPS_PER_INTERVAL = 1  # 1 lap = 400m
+    DEFAULT_LAPS_PER_INTERVAL = 1
     DEFAULT_REST_DURATION = 60
     DEFAULT_START_MODE = "INDIVIDUAL"
     
     def __init__(self):
-        """Initialize CLI with default workout and use cases."""
+        """Initialize CLI with default workout."""
         # Repository
         self.repository = InMemoryWorkoutRepository()
         
-        # Initialize use cases
-        self.add_runner_use_case = AddRunnerToWorkoutUseCase(self.repository)
-        self.group_start_use_case = GroupStartUseCase(self.repository)
-        self.get_rest_screen_use_case = GetRestScreenUseCase(self.repository)
-        self.get_running_screen_use_case = GetRunningScreenUseCase(self.repository)
+        # Use cases
+        self.start_workout_uc = StartWorkoutUseCase(self.repository)
+        self.scan_nfc_uc = ScanNFCUseCase(self.repository)
+        self.scan_rfid_uc = ScanRFIDUseCase(self.repository)
+        self.get_rest_screen_uc = GetRestScreenUseCase(self.repository)
+        self.end_workout_uc = EndWorkoutUseCase(self.repository)
         
         # CSV utilities
         self.csv_importer = CSVWorkoutImporter()
@@ -77,6 +72,9 @@ class IntervalTrainingCLI:
         # Current workout
         self.workout = None
         self._create_default_workout()
+        
+        # Track group members (NFC tags)
+        self.group_members: Set[str] = set()
         
         # Menu mapping
         self.menu_options = {
@@ -89,7 +87,8 @@ class IntervalTrainingCLI:
             '7': self.get_running_athletes,
             '8': self.terminate_application,
             'help': self.show_help,
-            'status': self.show_workout_status
+            'status': self.show_workout_status,
+            'group': self.show_group_members
         }
     
     def _create_default_workout(self):
@@ -123,17 +122,14 @@ class IntervalTrainingCLI:
                 if not command:
                     continue
                 
-                # Parse command and arguments
                 parts = command.split()
                 menu_option = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
                 
-                # Handle exit
                 if menu_option in ['8', 'exit', 'quit', 'q']:
                     self.terminate_application(args)
                     break
                 
-                # Execute command
                 if menu_option in self.menu_options:
                     self.menu_options[menu_option](args)
                 else:
@@ -159,7 +155,7 @@ class IntervalTrainingCLI:
         print("  " + "-" * 56)
         print("   1 <filepath>    - Load athletes from CSV file")
         print("   2 <nfc_tag>     - Add athlete to group (by NFC tag)")
-        print("   3              - Trigger group start (all added athletes)")
+        print("   3              - Trigger group start (starts ONLY group members)")
         print("   4 <rfid_tag>    - Send RFID tag detected event (finish lap)")
         print("   5 <nfc_tag>     - Send NFC tag scanned event (start interval)")
         print("   6              - Get list of currently resting athletes")
@@ -167,24 +163,39 @@ class IntervalTrainingCLI:
         print("   8              - Terminate application")
         print("  " + "-" * 56)
         print("   status         - Show current workout status")
+        print("   group          - Show current group members")
         print("   help           - Show this help message")
         print("\n  EXAMPLES:")
         print("   1 data/athletes.csv")
         print("   2 NFC001")
+        print("   3")
         print("   4 RFID001")
         print("   5 NFC002")
         print("=" * 60)
     
+    def show_group_members(self, args: List[str] = None):
+        """Show current group members."""
+        if not self.group_members:
+            print("\n  No athletes in the current group.")
+            print("  Use option 2 <nfc_tag> to add athletes to the group.")
+            return
+        
+        print("\n  CURRENT GROUP MEMBERS:")
+        print("  " + "-" * 40)
+        for nfc_tag in sorted(self.group_members):
+            runner_session = self.workout._find_runner_session_by_nfc(nfc_tag)
+            if runner_session:
+                print(f"    • {runner_session.runner.name} (NFC: {nfc_tag}) - {runner_session.state}")
+            else:
+                print(f"    • Unknown runner (NFC: {nfc_tag})")
+        print(f"\n  Total group members: {len(self.group_members)}")
+    
     # ========== OPTION 1: Load athletes from CSV ==========
     
     def load_athletes_from_csv(self, args: List[str]):
-        """
-        Load athletes from CSV file.
-        Usage: 1 <filepath>
-        """
+        """Load athletes from CSV file. Usage: 1 <filepath>"""
         if len(args) < 1:
-            print("  Error: Missing file path")
-            print("  Usage: 1 <filepath>")
+            print("  Error: Missing file path. Usage: 1 <filepath>")
             return
         
         file_path = args[0]
@@ -198,17 +209,16 @@ class IntervalTrainingCLI:
             csv_data = self.csv_parser.parse_csv_file(file_path)
             runners = self.csv_parser.create_runners_from_csv(csv_data)
             
-            # Create RunnerSessions for each runner with default rest duration
+            # Add runners to workout
             added_count = 0
             for runner in runners:
                 try:
-                    # Check if runner already exists in workout
+                    # Check if runner already exists
                     existing = self.workout._find_runner_session_by_nfc(runner.nfc_tag)
                     if existing:
                         print(f"  Warning: Runner {runner.name} already in workout, skipping")
                         continue
                     
-                    # Create runner session with default rest duration
                     runner_session = RunnerSession(
                         runner=runner,
                         restDuration=self.DEFAULT_REST_DURATION,
@@ -220,13 +230,11 @@ class IntervalTrainingCLI:
                 except ValueError as e:
                     print(f"  Warning: Could not add {runner.name}: {e}")
             
-            # Save updated workout
             self.repository.save(self.workout)
             
             print(f"\n  ✓ Loaded {added_count} athletes from {file_path}")
             print(f"  Total athletes in workout: {len(self.workout.runnerSessions)}")
             
-            # Show first few imported athletes
             if added_count > 0:
                 print("\n  Imported athletes:")
                 for rs in self.workout.runnerSessions[-added_count:][:3]:
@@ -239,22 +247,17 @@ class IntervalTrainingCLI:
         except Exception as e:
             print(f"  Unexpected error: {e}")
     
-    # ========== OPTION 2: Add athlete to group (by NFC tag) ==========
+    # ========== OPTION 2: Add athlete to group ==========
     
     def add_athlete_to_group(self, args: List[str]):
-        """
-        Add athlete to group by NFC tag.
-        Usage: 2 <nfc_tag>
-        """
+        """Add athlete to group by NFC tag. Usage: 2 <nfc_tag>"""
         if len(args) < 1:
-            print("  Error: Missing NFC tag")
-            print("  Usage: 2 <nfc_tag>")
+            print("  Error: Missing NFC tag. Usage: 2 <nfc_tag>")
             return
         
         nfc_tag = args[0]
         
         try:
-            # Find runner in existing runner sessions
             runner_session = self.workout._find_runner_session_by_nfc(nfc_tag)
             
             if not runner_session:
@@ -262,9 +265,13 @@ class IntervalTrainingCLI:
                 print("  Tip: Load athletes from CSV first (option 1)")
                 return
             
-            # Check if athlete is already in group (they are if they have a runner session)
-            print(f"  ✓ Athlete {runner_session.runner.name} is in the group")
-            print(f"    State: {runner_session.state}")
+            if nfc_tag in self.group_members:
+                print(f"  ✓ Athlete {runner_session.runner.name} is already in the group")
+            else:
+                self.group_members.add(nfc_tag)
+                print(f"  ✓ Added {runner_session.runner.name} to group (NFC: {nfc_tag})")
+            
+            print(f"  Group size: {len(self.group_members)} athletes")
             
         except Exception as e:
             print(f"  Error: {e}")
@@ -272,74 +279,75 @@ class IntervalTrainingCLI:
     # ========== OPTION 3: Trigger group start ==========
     
     def trigger_group_start(self, args: List[str]):
-        """
-        Start all athletes that have been added to the group.
-        Usage: 3
-        """
-        if not self.workout.runnerSessions:
+        """Start ONLY the athletes that have been added to the group. Usage: 3"""
+        if not self.group_members:
             print("  Error: No athletes in group")
-            print("  Tip: Load athletes from CSV first (option 1)")
+            print("  Tip: Use option 2 <nfc_tag> to add athletes to the group first")
             return
         
         try:
-            # Start workout if not already active
             if self.workout.status == "NOT_STARTED":
                 self.workout.start()
                 print("  ✓ Workout started")
             
-            # Start all READY runners
             started_count = 0
-            for rs in self.workout.runnerSessions:
-                if rs.state in ["NOT_STARTED", "READY"]:
-                    try:
-                        rs.start_interval()
-                        started_count += 1
-                    except ValueError as e:
-                        print(f"  Warning: Could not start {rs.runner.name}: {e}")
+            skipped_count = 0
             
-            # Save changes
+            for nfc_tag in list(self.group_members):
+                runner_session = self.workout._find_runner_session_by_nfc(nfc_tag)
+                
+                if not runner_session:
+                    print(f"  Warning: No runner found for NFC tag {nfc_tag} (removing from group)")
+                    self.group_members.remove(nfc_tag)
+                    continue
+                
+                if runner_session.state in ["NOT_STARTED", "READY"]:
+                    try:
+                        runner_session.start_interval()
+                        started_count += 1
+                        print(f"    ✓ {runner_session.runner.name} started interval {len(runner_session.intervals)}")
+                    except ValueError as e:
+                        print(f"    ✗ Could not start {runner_session.runner.name}: {e}")
+                        skipped_count += 1
+                else:
+                    print(f"    - {runner_session.runner.name} is {runner_session.state} (cannot start)")
+                    skipped_count += 1
+            
             self.repository.save(self.workout)
             
             active, resting = self.workout.get_runner_counts()
-            print(f"\n  ✓ Group start triggered")
+            print(f"\n  ✓ Group start completed")
             print(f"    Started: {started_count} athletes")
+            print(f"    Skipped: {skipped_count} athletes")
             print(f"    Active: {active}")
             print(f"    Resting: {resting}")
             
         except Exception as e:
             print(f"  Error starting group: {e}")
     
-    # ========== OPTION 4: Send RFID tag detected event ==========
+    # ========== OPTION 4: Send RFID event ==========
     
     def send_rfid_event(self, args: List[str]):
-        """
-        Send RFID tag detected event (runner finishes lap/interval).
-        Usage: 4 <rfid_tag>
-        """
+        """Send RFID tag detected event. Usage: 4 <rfid_tag>"""
         if len(args) < 1:
-            print("  Error: Missing RFID tag")
-            print("  Usage: 4 <rfid_tag>")
+            print("  Error: Missing RFID tag. Usage: 4 <rfid_tag>")
             return
         
         rfid_tag = args[0]
         
         try:
-            # Check if workout is active
             if self.workout.status != "ACTIVE":
                 print("  Error: Workout is not active")
                 print("  Tip: Trigger group start first (option 3)")
                 return
             
-            # Find runner by RFID
             rs = self.workout._find_runner_session_by_rfid(rfid_tag)
             if not rs:
                 print(f"  Error: No athlete found with RFID tag: {rfid_tag}")
                 return
             
-            # Record lap
             rs.record_lap()
             
-            # Check if interval should finish
             if rs.should_finish_interval(self.workout.lapsPerInterval):
                 rs.finish_interval()
                 print(f"  ✓ {rs.runner.name} completed interval {len(rs.intervals)}")
@@ -348,10 +356,8 @@ class IntervalTrainingCLI:
                 laps_completed = len(rs.intervals[-1]["laps"]) if rs.intervals else 0
                 print(f"  ✓ {rs.runner.name} completed lap {laps_completed}/{self.workout.lapsPerInterval}")
             
-            # Save changes
             self.repository.save(self.workout)
             
-            # Show updated counts
             active, resting = self.workout.get_runner_counts()
             print(f"    Active: {active}, Resting: {resting}")
             
@@ -360,46 +366,35 @@ class IntervalTrainingCLI:
         except Exception as e:
             print(f"  Unexpected error: {e}")
     
-    # ========== OPTION 5: Send NFC tag scanned event ==========
+    # ========== OPTION 5: Send NFC event ==========
     
     def send_nfc_event(self, args: List[str]):
-        """
-        Send NFC tag scanned event (runner starts interval).
-        Usage: 5 <nfc_tag>
-        """
+        """Send NFC tag scanned event. Usage: 5 <nfc_tag>"""
         if len(args) < 1:
-            print("  Error: Missing NFC tag")
-            print("  Usage: 5 <nfc_tag>")
+            print("  Error: Missing NFC tag. Usage: 5 <nfc_tag>")
             return
         
         nfc_tag = args[0]
         
         try:
-            # Check if workout is active
             if self.workout.status != "ACTIVE":
                 print("  Error: Workout is not active")
                 print("  Tip: Trigger group start first (option 3)")
                 return
             
-            # Find runner by NFC
             rs = self.workout._find_runner_session_by_nfc(nfc_tag)
             if not rs:
                 print(f"  Error: No athlete found with NFC tag: {nfc_tag}")
                 return
             
-            # Check if runner is ready
             rs.check_if_ready()
-            
-            # Start interval
             rs.start_interval()
             
             print(f"  ✓ {rs.runner.name} started interval {len(rs.intervals)}")
             print(f"    State: {rs.state}")
             
-            # Save changes
             self.repository.save(self.workout)
             
-            # Show updated counts
             active, resting = self.workout.get_runner_counts()
             print(f"    Active: {active}, Resting: {resting}")
             
@@ -408,15 +403,11 @@ class IntervalTrainingCLI:
         except Exception as e:
             print(f"  Unexpected error: {e}")
     
-    # ========== OPTION 6: Get list of resting athletes ==========
+    # ========== OPTION 6: Get resting athletes ==========
     
     def get_resting_athletes(self, args: List[str]):
-        """
-        Get and print list of currently resting athletes.
-        Usage: 6
-        """
+        """Get list of currently resting athletes. Usage: 6"""
         try:
-            # Update rest status for all runners
             for rs in self.workout.runnerSessions:
                 rs.check_if_ready()
             
@@ -438,27 +429,27 @@ class IntervalTrainingCLI:
                 secs = remaining % 60
                 time_str = f"{mins:02d}:{secs:02d}"
                 
-                # Find interval number for this runner
-                rs = self.workout._find_runner_session_by_nfc(
-                    next((rs for rs in self.workout.runnerSessions if rs.runner.id == data["runner_id"]), None)
-                )
-                interval_num = len(rs.intervals) if rs else 0
+                rs = None
+                for session in self.workout.runnerSessions:
+                    if session.runner.id == data["runner_id"]:
+                        rs = session
+                        break
                 
-                print(f"  {data['runner_name']:<20} {time_str:<15} {interval_num:<10}")
+                interval_num = len(rs.intervals) if rs else 0
+                group_marker = "*" if rs and rs.runner.nfc_tag in self.group_members else " "
+                
+                print(f"  {group_marker} {data['runner_name']:<18} {time_str:<15} {interval_num:<10}")
             
             print("  " + "=" * 56)
-            print(f"  Total resting: {len(rest_data)}")
+            print(f"  Total resting: {len(rest_data)}  (* = group member)")
             
         except Exception as e:
             print(f"  Error getting rest screen: {e}")
     
-    # ========== OPTION 7: Get list of running athletes ==========
+    # ========== OPTION 7: Get running athletes ==========
     
     def get_running_athletes(self, args: List[str]):
-        """
-        Get and print list of currently running athletes.
-        Usage: 7
-        """
+        """Get list of currently running athletes. Usage: 7"""
         try:
             running_sessions = [rs for rs in self.workout.runnerSessions if rs.state == "RUNNING"]
             
@@ -476,11 +467,12 @@ class IntervalTrainingCLI:
                 interval_num = len(rs.intervals)
                 laps_completed = len(rs.intervals[-1]["laps"]) if rs.intervals else 0
                 progress = f"{laps_completed}/{self.workout.lapsPerInterval}"
+                group_marker = "*" if rs.runner.nfc_tag in self.group_members else " "
                 
-                print(f"  {rs.runner.name:<20} {interval_num:<15} {progress:<15}")
+                print(f"  {group_marker} {rs.runner.name:<18} {interval_num:<15} {progress:<15}")
             
             print("  " + "=" * 56)
-            print(f"  Total running: {len(running_sessions)}")
+            print(f"  Total running: {len(running_sessions)}  (* = group member)")
             
         except Exception as e:
             print(f"  Error getting running athletes: {e}")
@@ -500,6 +492,7 @@ class IntervalTrainingCLI:
         try:
             active, resting = self.workout.get_runner_counts()
             total = len(self.workout.runnerSessions)
+            not_started = total - active - resting
             
             print("\n  " + "=" * 56)
             print("  WORKOUT STATUS")
@@ -507,9 +500,10 @@ class IntervalTrainingCLI:
             print(f"  Workout ID:    {self.workout.workout_id}")
             print(f"  Status:        {self.workout.status}")
             print(f"  Total Runners: {total}")
+            print(f"  Group Members: {len(self.group_members)}")
             print(f"  Active:        {active}")
             print(f"  Resting:       {resting}")
-            print(f"  Not Started:   {total - active - resting}")
+            print(f"  Not Started:   {not_started}")
             print("  " + "=" * 56)
             
         except Exception as e:
@@ -520,9 +514,7 @@ def main():
     """Main entry point."""
     cli = IntervalTrainingCLI()
     
-    # Check for command line arguments for non-interactive mode
     if len(sys.argv) > 1:
-        # Non-interactive mode - execute single command
         command = " ".join(sys.argv[1:])
         print(f"Executing: {command}")
         
@@ -540,7 +532,6 @@ def main():
             print(f"Unknown command: {menu_option}")
             sys.exit(1)
     else:
-        # Interactive mode
         try:
             cli.run()
         except KeyboardInterrupt:
