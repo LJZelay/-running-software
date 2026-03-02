@@ -132,7 +132,7 @@ class RunnerSession:
             self.state = RunnerState.READY
 
     # UI concern, might remove later
-    def get_remaining_restDuration(self, now: Optional[str] = None) -> int:
+    def get_remaining_rest_seconds(self, now: Optional[str] = None) -> int:
         """
         Remaining rest seconds
         """

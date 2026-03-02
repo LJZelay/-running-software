@@ -1,4 +1,4 @@
-name,nfc_tag,rfid_tag,email
+name,nfc_id,rfid_id,email
 Alice,NFC001,RFID001,alice@example.com
 Bob,NFC002,RFID002,bob@example.com
 Charlie,NFC003,RFID003,charlie@example.com
