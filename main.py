@@ -97,7 +97,6 @@ def main() -> None:
     for view in rest_views:
         print(
             f"Runner: {view.runner_name}, "
-            f"Remaining Rest: {view.remaining_rest_seconds}s"
         )
 
     # -----------------------------

@@ -4,6 +4,7 @@ from application.input_validation import validate_positive_int
 
 
 class EndWorkoutUseCase:
+    """Use case for ending a workout."""
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository
@@ -22,5 +23,3 @@ class EndWorkoutUseCase:
             self.workout_repository.save(workout)
         
         return result
-
-# This use case handles the logic for ending a workout. It validates the input, retrieves the workout from the repository, calls the end method on the workout, and saves the updated workout back to the repository if it was successfully ended.

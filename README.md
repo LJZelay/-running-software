@@ -1,10 +1,16 @@
 # CSE 4504 Team Project
 
-## Work Assignments
+## Work Assignments 
 
+Feature 1 implementation:
 Cliff - Runner Object - Domain Layer
 Lesly - Workout Object - Application Layer
 Joel - csvInput within aplication layer
+
+CLI implementation:
+Lesly - WorkoutService - Application Layer
+Joel - WorkoutController - Controller Layer
+cliff - check for any errors -User experience and testing
 
 ## Developer's Guide
 
