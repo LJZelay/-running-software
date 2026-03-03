@@ -16,7 +16,8 @@ cliff - check for any errors -User experience and testing
 
 ### Prerequisites
 
-This project requires Python 3.7 or higher. No external dependencies are needed—the application uses only Python standard libraries.
+This project requires Python 3.7 or higher. Applications itself uses only Python standard libraries. However, running tests requires pytest.
+
 
 To check your Python version:
 ```bash
@@ -35,6 +36,14 @@ python --version
    - `datetime` - For timestamp handling
    - `typing` - For type hints
    - `abc` - For abstract base classes
+
+3. **Install testing framework (pytest):**
+   - ```bash 
+   python -m pip install pytest
+   - If your repo includes `requirements.txt`, install all dependencies with:
+   python -m pip install -r requirements.txt
+```
+
 
 ### Running the Application
 
@@ -69,6 +78,26 @@ python -c "import sys; sys.path.insert(0, '.'); from application.test_happy_path
 ```
 
 **Expected Output:** `✓ Happy path test PASSED`
+
+This project uses **pytest** for unit and integration testing. 
+
+Run all tests:
+
+```bash
+python -m pytest -v
+```
+
+Run only domain test:
+```bash
+python -m pytest -m domain -v
+```
+
+Run only application layer tests:
+```bash
+python -m pytest -m application -v
+```
+
+**Expected Output:** pytest will display `PASS/FAIL` results for each test
 
 ### Project Structure
 

@@ -1,5 +1,6 @@
 class RunnerRestView: #DTO for representing the rest screen information of a runner in the workout.
     
+    # Brought back remaining rest seconds for test purposes, will be moved to External Interfaces later
     def __init__(
         self,
         runner_id: int,

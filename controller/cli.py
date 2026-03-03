@@ -28,7 +28,8 @@ from domain.runnerSession import RunnerSession
 from domain.workout import Workout
 
 # Application layer imports
-from application.csvInput import CSVWorkoutImporter, CSVInputParser, CSVInputError
+from application.csvWorkoutImporter import CSVWorkoutImporter
+from externalInterface.csv_roster_parser import CSVInputError
 
 # Repository
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
@@ -67,7 +68,6 @@ class IntervalTrainingCLI:
         
         # CSV utilities
         self.csv_importer = CSVWorkoutImporter()
-        self.csv_parser = CSVInputParser(strict_validation=False)
         
         # Current workout
         self.workout = None
@@ -205,39 +205,25 @@ class IntervalTrainingCLI:
             return
         
         try:
-            # Parse CSV and create runners
-            csv_data = self.csv_parser.parse_csv_file(file_path)
-            runners = self.csv_parser.create_runners_from_csv(csv_data)
+            # Import roster using CSVWorkoutImporter
+            updated_workout, runner_sessions = self.csv_importer.import_roster_to_workout(
+                self.workout,
+                file_path,
+                self.DEFAULT_REST_DURATION,
+                starting_runner_id=len(self.workout.runnerSessions) + 1
+            )
             
-            # Add runners to workout
-            added_count = 0
-            for runner in runners:
-                try:
-                    # Check if runner already exists
-                    existing = self.workout._find_runner_session_by_nfc(runner.nfc_tag)
-                    if existing:
-                        print(f"  Warning: Runner {runner.name} already in workout, skipping")
-                        continue
-                    
-                    runner_session = RunnerSession(
-                        runner=runner,
-                        restDuration=self.DEFAULT_REST_DURATION,
-                        state="NOT_STARTED"
-                    )
-                    self.workout.add_runner_session(runner_session)
-                    added_count += 1
-                    
-                except ValueError as e:
-                    print(f"  Warning: Could not add {runner.name}: {e}")
-            
+            # Update workout reference and save
+            self.workout = updated_workout
             self.repository.save(self.workout)
             
+            added_count = len(runner_sessions)
             print(f"\n  ✓ Loaded {added_count} athletes from {file_path}")
             print(f"  Total athletes in workout: {len(self.workout.runnerSessions)}")
             
             if added_count > 0:
                 print("\n  Imported athletes:")
-                for rs in self.workout.runnerSessions[-added_count:][:3]:
+                for rs in runner_sessions[:3]:
                     print(f"    - {rs.runner.name} (NFC: {rs.runner.nfc_tag}, RFID: {rs.runner.rfid_tag})")
                 if added_count > 3:
                     print(f"    ... and {added_count - 3} more")

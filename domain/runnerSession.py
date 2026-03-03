@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Any, Dict, Union
 from domain.runner import Runner
-"""from datetime import datetime"""
+from domain.runnerState import RunnerState
 
 """def _parse_ts(ts: str) -> datetime:
     "return datetime.fromisoformat(ts)"""
@@ -12,14 +12,14 @@ class RunnerSession:
 
     Stores dynamic state of a runner during a workout session:
     - runner identity
-    - restDuration (dynamic)
-    - current state (NOT_STARTED / READY / RUNNING / RESTING)
+    - restDuration (per-runner)
+    - current state (RunnerState)
     - interval timestamps
     - rest timestamps
 
     Core rules:
     - cannot start if already running
-    - cannot start if resting
+    - cannot start if resting (unless rest expired -> READY)
     - rest expires after restDuration, then state becomes READY
     - interval finishes when laps_per_interval is reached, then rest starts immediately
     """
@@ -28,14 +28,22 @@ class RunnerSession:
         self,
         runner: Runner,
         restDuration: int,
-        state: Optional[str] = None,
-        intervals: Optional[List[dict]] = None,
-        rests: Optional[List[dict]] = None,
+        state: Optional[Union[RunnerState, str]] = None,
+        intervals: Optional[List[Dict[str, Any]]] = None,
+        rests: Optional[List[Dict[str, Any]]] = None,
     ):
         self.runner = runner
         self.restDuration = restDuration
 
-        self.state = "NOT_STARTED" if state is None else state
+        # Convert incoming state (string or enum) into RunnerState
+        if state is None:
+            self.state: RunnerState = RunnerState.NOT_STARTED
+        elif isinstance(state, RunnerState):
+            self.state = state
+        else:
+            # Expect strings like "NOT_STARTED", "READY", "RUNNING", "RESTING"
+            self.state = RunnerState(state)
+
         self.intervals = [] if intervals is None else intervals
         self.rests = [] if rests is None else rests
 
@@ -43,15 +51,15 @@ class RunnerSession:
     # Domain Behavior
     # ---------------------------
 
-    def start_interval(self):
+    def start_interval(self) -> None:
         """
         Start running an interval when NFC scan occurs.
         """
         self.check_if_ready()
 
-        if self.state == "RUNNING":
+        if self.state == RunnerState.RUNNING:
             raise ValueError("Runner is already running")
-        if self.state == "RESTING":
+        if self.state == RunnerState.RESTING:
             raise ValueError("Runner is resting and cannot start yet")
 
         intervalNumber = len(self.intervals) + 1
@@ -61,13 +69,13 @@ class RunnerSession:
             "laps": [],
             "end": None
         })
-        self.state = "RUNNING"
+        self.state = RunnerState.RUNNING
 
-    def record_lap(self):
+    def record_lap(self) -> None:
         """
         Record an RFID detection (a lap completion) while running.
         """
-        if self.state != "RUNNING":
+        if self.state != RunnerState.RUNNING:
             raise ValueError("Cannot record lap unless runner is running")
         currentInterval = self.intervals[-1]
         currentInterval["laps"].append(datetime.now().isoformat())
@@ -76,33 +84,44 @@ class RunnerSession:
         """
         Check if current interval is complete based on number of laps.
         """
-        if self.state != "RUNNING":
+        if self.state != RunnerState.RUNNING:
             return False
         currentInterval = self.intervals[-1]
         return len(currentInterval["laps"]) >= lapsPerInterval
 
-    def finish_interval(self):
+    def record_lap_and_update_state(self, lapsPerInterval: int) -> RunnerState:
+        """
+        Convenience method so application layer doesn't need to orchestrate finish logic.
+        """
+        self.record_lap()
+        if self.should_finish_interval(lapsPerInterval):
+            self.finish_interval()
+        return self.state
+
+    def finish_interval(self) -> None:
         """
         Finish current running interval and start rest.
         """
-        if self.state != "RUNNING":
+        if self.state != RunnerState.RUNNING:
             raise ValueError("Runner is not running")
 
+        now_iso = datetime.now().isoformat()
+
         currentInterval = self.intervals[-1]
-        currentInterval["end"] = datetime.now().isoformat()
+        currentInterval["end"] = now_iso
 
         self.rests.append({
-            "start": datetime.now().isoformat(),
+            "start": now_iso,
             "restDuration": self.restDuration,
             "end": None
         })
-        self.state = "RESTING"
+        self.state = RunnerState.RESTING
 
-    def check_if_ready(self):
+    def check_if_ready(self) -> None:
         """
         Check if runner is ready to start a new interval (rest period over).
         """
-        if self.state != "RESTING":
+        if self.state != RunnerState.RESTING:
             return
 
         currentRest = self.rests[-1]
@@ -112,36 +131,46 @@ class RunnerSession:
         if elapsed >= currentRest["restDuration"]:
             if currentRest["end"] is None:
                 currentRest["end"] = datetime.now().isoformat()
-            self.state = "READY"
+            self.state = RunnerState.READY
 
-    def get_remaining_restDuration(self) -> int:
+    # UI concern, might remove later
+    def get_remaining_rest_seconds(self, now: Optional[str] = None) -> int:
         """
-        For display purposes
+        Remaining rest seconds
         """
-        if self.state != "RESTING":
+        if self.state != RunnerState.RESTING:
             return 0
 
         currentRest = self.rests[-1]
         startTime = datetime.fromisoformat(currentRest["start"])
-        elapsed = (datetime.now() - startTime).total_seconds()
-        remaining = currentRest["restDuration"] - int(elapsed)
+        now_dt = datetime.fromisoformat(now) if now is not None else datetime.now()
+        elapsed = (now_dt - startTime).total_seconds()
+
+        remaining = int(currentRest["restDuration"] - elapsed)
         return max(0, remaining)
+    
+    def is_ready(self) -> bool:
+        """
+        Returns True if runner is ready to start next interval.
+        """
+        self.check_if_ready()
+        return self.state == RunnerState.READY
 
     # ---------------------------
     # Persistence helpers
     # ---------------------------
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "runner": self.runner.to_dict(),
             "restDuration": self.restDuration,
-            "state": self.state,
+            "state": self.state.value, 
             "intervals": self.intervals,
             "rests": self.rests,
         }
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: Dict[str, Any]) -> "RunnerSession":
         return cls(
             runner=Runner.from_dict(data["runner"]),
             restDuration=data["restDuration"],
