@@ -22,8 +22,8 @@ def load_athlete_from_csv(index: int = 0) -> Runner:
                     runner_id=idx + 1,
                     name=row['name'],
                     email=row['email'],
-                    nfc_tag=row['nfc_tag'],
-                    rfid_tag=row['rfid_tag']
+                    nfc_tag=row['nfc_id'],
+                    rfid_tag=row['rfid_id']
                 )
     raise ValueError(f"Athlete at index {index} not found")
 

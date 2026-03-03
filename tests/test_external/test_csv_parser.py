@@ -28,7 +28,7 @@ class TestCSVParserParsing:
     
     def test_parse_csv_string_with_header_variants(self):
         """Test parsing CSV with header name variants."""
-        csv_string = """name,nfc_tag,rfid_tag,email
+        csv_string = """name,nfc_id,rfid_id,email
 Charlie,NFC003,RFID003,charlie@example.com"""
         
         parser = CSVRosterParser(strict_validation=False)
@@ -39,7 +39,7 @@ Charlie,NFC003,RFID003,charlie@example.com"""
     
     def test_parse_csv_string_with_missing_required_column(self):
         """Test parsing CSV with missing required column raises error."""
-        csv_string = """name,nfc_tag,email
+        csv_string = """name,nfc_id,email
 Alice,NFC001,alice@example.com"""
         
         parser = CSVRosterParser(strict_validation=True)
@@ -47,7 +47,7 @@ Alice,NFC001,alice@example.com"""
         with pytest.raises(CSVInputError) as exc_info:
             parser.parse_csv_string(csv_string)
         
-        assert "rfid_tag" in str(exc_info.value).lower()
+        assert "rfid_id" in str(exc_info.value).lower()
 
 
 @pytest.mark.external
@@ -98,7 +98,7 @@ class TestCSVParserStrictMode:
     
     def test_strict_mode_raises_on_invalid_row(self):
         """Test that strict mode raises on invalid rows."""
-        csv_string = """name,nfc_tag,rfid_tag,email
+        csv_string = """name,nfc_id,rfid_id,email
 Alice,NFC001,RFID001,alice@example.com
 X,NFC002,RFID002,invalid"""  # Name too short
         
@@ -109,7 +109,7 @@ X,NFC002,RFID002,invalid"""  # Name too short
     
     def test_non_strict_mode_skips_invalid_rows(self):
         """Test that non-strict mode skips invalid rows."""
-        csv_string = """name,nfc_tag,rfid_tag,email
+        csv_string = """name,nfc_id,rfid_id,email
 Alice,NFC001,RFID001,alice@example.com
 X,NFC002,RFID002,invalid
 Bob,NFC003,RFID003,bob@example.com"""
