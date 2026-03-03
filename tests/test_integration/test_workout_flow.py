@@ -31,8 +31,8 @@ def load_athletes_from_csv(limit: int = None) -> list[Runner]:
                 runner_id=idx,
                 name=row['name'],
                 email=row['email'],
-                nfc_tag=row['nfc_tag'],
-                rfid_tag=row['rfid_tag']
+                nfc_tag=row['nfc_id'],
+                rfid_tag=row['rfid_id']
             )
             athletes.append(athlete)
     return athletes
