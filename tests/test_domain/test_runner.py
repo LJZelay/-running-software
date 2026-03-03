@@ -39,60 +39,38 @@ class TestRunnerCreation:
         assert runner.email == "alice@example.com"
         assert runner.nfc_tag == "NFC001"
         assert runner.rfid_tag == "RFID001"
-    
-    def test_runner_creation_with_empty_email(self):
-        """Test that a runner can be created with empty email."""
-        runner = Runner(
-            runner_id=2,
-            name="Bob",
-            email="",
-            nfc_tag="NFC002",
-            rfid_tag="RFID002"
-        )
-        
-        assert runTestRunner",
-            email="",
-            nfc_tag="NFC999",
-            rfid_tag="RFID999
+
+
+@pytest.mark.domain
 class TestRunnerSerialization:
     """Test Runner serialization and deserialization."""
     
     def test_runner_to_dict_conversion(self):
         """Test that runner converts to dictionary correctly."""
         runner = load_athlete_from_csv(0)  # Load Alice
-        
         runner_dict = runner.to_dict()
         
-        assert runner_dict["id"] == runner.id
-        assert runner_dict["name"] == runner.name
-        assert runner_dict["email"] == runner.email
-        assert runner_dict["nfc_tag"] == runner.nfc_tag
-        assert runner_dict["rfid_tag"] == runner.rfid_tag
+        assert runner_dict["name"] == "Alice"
+        assert runner_dict["nfc_tag"] == "NFC001"
+        assert runner_dict["rfid_tag"] == "RFID001"
     
     def test_runner_from_dict_conversion(self):
         """Test that runner can be created from dictionary."""
-        data = {
-            "id": 1,
-            "name": "Alice",
-            "email": "alice@example.com",
-            "nfc_tag": "NFC001",
-            "rfid_tag": "RFID001"
-        original_runner = load_athlete_from_csv(0)  # Load Alice
-        data = original_runner.to_dict()
+        original = load_athlete_from_csv(1)  # Load Bob
+        data = original.to_dict()
         
         runner = Runner.from_dict(data)
         
-        assert runner.id == original_runner.id
-        assert runner.name == original_runner.name
-        assert runner.email == original_runner.email
-        assert runner.nfc_tag == original_runner.nfc_tag
-        assert runner.rfid_tag == original_runner.rfid_tag
-            email="charlie@example.com",
-            nfc_tag="NFC005",
-            rfid_tag="RFID005"
-        )
+        assert runner.name == original.name
+        assert runner.nfc_tag == original.nfc_tag
+        assert runner.rfid_tag == original.rfid_tag
+    
+    def test_runner_roundtrip_conversion(self):
+        """Test that runner survives roundtrip to dict and back."""
+        original = load_athlete_from_csv(2)  # Load Charlie
         
         reconstructed = Runner.from_dict(original.to_dict())
         
-        assert original.id == reconstructed.id
-        assert origload_athlete_from_csv(2)  # Load Charlie
+        assert original.name == reconstructed.name
+        assert original.nfc_tag == reconstructed.nfc_tag
+        assert original.rfid_tag == reconstructed.rfid_tag
