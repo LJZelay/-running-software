@@ -11,6 +11,8 @@ class Workout:
     Domain Entity: Workout
     """
 
+    #changed the constructor to include startMode as an optional parameter, and added validation for intervalDistance and lapsPerInterval. Also added helper functions to find runner sessions by NFC and RFID tags, and a function to get the rest screen data for display purposes.
+
     def __init__(
         self,
         workout_id: int,
