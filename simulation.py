@@ -1,189 +1,203 @@
-import csv
 import sys
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List
 
-# Command to run:
-# python simulation.py .\simulation\interval_training_test_data\group_and_single_start\athletes.csv .\simulation\interval_training_test_data\group_and_single_start\commands.csv
+from application.WorkoutConfig import WorkoutConfig
+from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
+from application.use_cases.add_runner_to_workout import AddRunnerToWorkoutUseCase
+from application.use_cases.scan_nfc import ScanNFCUseCase
+from application.use_cases.scan_rfid import ScanRFIDUseCase
+from application.use_cases.start_workout import StartWorkoutUseCase
+from domain.runner import Runner
+from domain.workout import Workout
+from externalInterface.simulation_csv_parser import (
+    ParsedAthlete,
+    ParsedCommand,
+    SimulationCSVError,
+    parse_athletes_csv,
+    parse_commands_csv,
+)
 
-INTERVAL_DISTANCE_METERS = 400
-LAPS_PER_INTERVAL = 1
-DEFAULT_REST_SECONDS = 60
 
-@dataclass
-class Athlete:
-    first_name: str
-    last_name: str
-    rfid_tag: str
-    nfc_tag: str
-    email: str = ""
+def _epoch_ms_to_iso(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).isoformat()
 
-@dataclass
-class AthleteTimeline:
-    athlete: Athlete
-    intervals: List[Tuple[int, int]] = field(default_factory=list)
-    rests: List[Tuple[int, int]] = field(default_factory=list)
 
-    current_interval_start_ms: Optional[int] = None
+def _duration_seconds(start_iso: str, end_iso: str) -> float:
+    start_dt = datetime.fromisoformat(start_iso)
+    end_dt = datetime.fromisoformat(end_iso)
+    return (end_dt - start_dt).total_seconds()
 
-    def start_interval(self, start_ms: int) -> None:
-        # If the runner is currently running, ignore/raise; for simulation we ignore duplicate starts.
-        if self.current_interval_start_ms is not None:
-            return
-        self.current_interval_start_ms = start_ms
 
-    def finish_interval(self, end_ms: int) -> None:
-        # Ignore RFID if no interval is currently running
-        if self.current_interval_start_ms is None:
-            return
+def _format_seconds(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
-        start_ms = self.current_interval_start_ms
-        # Ignore if end is before start
-        if end_ms < start_ms:
-            return
 
-        self.intervals.append((start_ms, end_ms))
-        self.current_interval_start_ms = None
-        # Rest start is end_ms; rest end will be filled when next interval starts
-        # We'll add rest as "open" using end_ms and fill later.
-        self.rests.append((end_ms, end_ms))
+def _register_runners(
+    athletes: List[ParsedAthlete],
+    workout_id: int,
+    add_runner_use_case: AddRunnerToWorkoutUseCase,
+    rest_seconds: int,
+) -> None:
+    for index, athlete in enumerate(athletes, start=1):
+        runner_name = athlete.first_name
+        if athlete.last_name:
+            runner_name = f"{athlete.first_name} {athlete.last_name}"
 
-    def close_last_rest_if_open(self, next_start_ms: int) -> None:
-        if not self.rests:
-            return
-        rest_start, rest_end = self.rests[-1]
-        # if rest_end == rest_start, we treat it as open
-        if rest_end == rest_start and next_start_ms >= rest_start:
-            self.rests[-1] = (rest_start, next_start_ms)
+        runner = Runner(
+            runner_id=index,
+            name=runner_name,
+            email=athlete.email,
+            nfc_tag=athlete.nfc_tag,
+            rfid_tag=athlete.rfid_tag,
+        )
+        add_runner_use_case.execute(workout_id, runner, rest_duration=rest_seconds)
 
-    def durations_seconds(self) -> List[float]:
-        """
-        Return [interval1_sec, rest1_sec, interval2_sec, rest2_sec, ...]
-        Only include rest_i if it has a real end (i.e., runner started again).
-        """
-        out: List[float] = []
-        for i, (s, e) in enumerate(self.intervals):
-            out.append((e - s) / 1000.0)
-            if i < len(self.rests):
-                rs, re = self.rests[i]
-                if re > rs:
-                    out.append((re - rs) / 1000.0)
-        return out
 
-def _norm(h: str) -> str:
-    return h.strip().lower()
-
-def load_athletes(athletes_csv_path: str) -> Dict[str, AthleteTimeline]:
-    """
-    Returns dict keyed by NFC tag, value = AthleteTimeline.
-    Also builds RFID lookup later from timelines.
-    """
-    with open(athletes_csv_path, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            raise ValueError("athletes.csv must have a header row")
-
-        # Map expected headers (case-insensitive)
-        headers = {_norm(h): h for h in reader.fieldnames}
-
-        def get(row, key):
-            col = headers.get(_norm(key))
-            return (row.get(col, "") if col else "").strip()
-
-        timelines: Dict[str, AthleteTimeline] = {}
-        for row in reader:
-            first = get(row, "First Name")
-            last = get(row, "Last Name")
-            rfid = get(row, "RFID TAG")
-            nfc = get(row, "NFC TAG")
-            email = get(row, "email")
-
-            if not first or not last or not rfid or not nfc:
-                raise ValueError("Each athlete row must include First Name, Last Name, RFID TAG, NFC TAG")
-
-            athlete = Athlete(first, last, rfid, nfc, email)
-            timelines[nfc] = AthleteTimeline(athlete=athlete)
-    return timelines
-
-def process_commands(commands_csv_path: str, timelines_by_nfc: Dict[str, AthleteTimeline]) -> None:
-    # Build RFID lookup
-    timelines_by_rfid: Dict[str, AthleteTimeline] = {
-        tl.athlete.rfid_tag: tl for tl in timelines_by_nfc.values()
-    }
-
+def _process_commands(
+    commands: List[ParsedCommand],
+    workout_id: int,
+    start_workout_use_case: StartWorkoutUseCase,
+    scan_nfc_use_case: ScanNFCUseCase,
+    scan_rfid_use_case: ScanRFIDUseCase,
+) -> None:
     current_group: List[str] = []
 
-    with open(commands_csv_path, "r", newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row:
+    for command in commands:
+        if command.command_type == "GROUP":
+            for nfc in command.nfc_tags or []:
+                if nfc not in current_group:
+                    current_group.append(nfc)
+            continue
+
+        if command.command_type == "START":
+            if command.timestamp_ms is None:
                 continue
 
-            cmd = row[0].strip().upper()
+            start_iso = _epoch_ms_to_iso(command.timestamp_ms)
+            start_workout_use_case.execute(workout_id, start_iso, use_event_time=True)
 
-            if cmd == "GROUP":
-                # GROUP, NFC1, NFC2, ...
-                current_group = [x.strip() for x in row[1:] if x.strip()]
-                # ignore unknown tags silently
-                current_group = [nfc for nfc in current_group if nfc in timelines_by_nfc]
+            for nfc in current_group:
+                try:
+                    scan_nfc_use_case.execute(workout_id, nfc, start_iso, use_event_time=True)
+                except ValueError:
+                    continue
+            current_group.clear()
+            continue
 
-            elif cmd == "START":
-                # START, TIMESTAMP
-                if len(row) < 2:
-                    continue
-                start_ms = int(row[1].strip())
-                # group start: all in current_group begin interval at start_ms
-                for nfc in current_group:
-                    tl = timelines_by_nfc[nfc]
-                    # Starting a new interval also closes prior rest if open
-                    tl.close_last_rest_if_open(start_ms)
-                    tl.start_interval(start_ms)
+        if command.command_type == "NFC":
+            if command.nfc_tag is None or command.timestamp_ms is None:
+                continue
+            try:
+                scan_nfc_use_case.execute(
+                    workout_id,
+                    command.nfc_tag,
+                    _epoch_ms_to_iso(command.timestamp_ms),
+                    use_event_time=True,
+                )
+            except ValueError:
+                continue
+            continue
 
-            elif cmd == "NFC":
-                # NFC, NFC_tag, TIMESTAMP
-                if len(row) < 3:
-                    continue
-                nfc_tag = row[1].strip()
-                ts_ms = int(row[2].strip())
-                tl = timelines_by_nfc.get(nfc_tag)
-                if tl is None:
-                    continue
-                tl.close_last_rest_if_open(ts_ms)
-                tl.start_interval(ts_ms)
-
-            elif cmd == "RFID":
-                # RFID, RFID_tag, TIMESTAMP
-                if len(row) < 3:
-                    continue
-                rfid_tag = row[1].strip()
-                ts_ms = int(row[2].strip())
-                tl = timelines_by_rfid.get(rfid_tag)
-                if tl is None:
-                    continue
-                tl.finish_interval(ts_ms)
-
-            else:
+        if command.command_type == "RFID":
+            if command.rfid_tag is None or command.timestamp_ms is None:
+                continue
+            try:
+                scan_rfid_use_case.execute(
+                    workout_id,
+                    command.rfid_tag,
+                    _epoch_ms_to_iso(command.timestamp_ms),
+                    use_event_time=True,
+                )
+            except ValueError:
                 continue
 
-def fmt_seconds(x: float) -> str:
-    # Print cleanly: integer if whole, else 3 decimals
-    if abs(x - round(x)) < 1e-9:
-        return str(int(round(x)))
-    return f"{x:.3f}".rstrip("0").rstrip(".")
+
+def _print_runner_summary(workout, athletes: List[ParsedAthlete]) -> None:
+    athletes_by_nfc: Dict[str, ParsedAthlete] = {athlete.nfc_tag: athlete for athlete in athletes}
+
+    for runner_session in workout.runnerSessions:
+        athlete = athletes_by_nfc.get(runner_session.runner.nfc_tag)
+        if athlete:
+            first_name = athlete.first_name
+            last_name = athlete.last_name
+        else:
+            name_parts = runner_session.runner.name.split(" ")
+            first_name = name_parts[0] if name_parts else ""
+            last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+
+        values: List[str] = [first_name, last_name]
+
+        for index, interval in enumerate(runner_session.intervals):
+            start_iso = interval.get("start")
+            end_iso = interval.get("end")
+            if start_iso and end_iso:
+                values.append(_format_seconds(_duration_seconds(start_iso, end_iso)))
+
+            if index < len(runner_session.rests):
+                rest = runner_session.rests[index]
+                rest_start = rest.get("start")
+                rest_end = rest.get("end")
+                if rest_start and rest_end:
+                    values.append(_format_seconds(_duration_seconds(rest_start, rest_end)))
+
+        print(", ".join(values))
+
 
 def main(argv: List[str]) -> int:
-    athletes_csv = argv[1]
-    commands_csv = argv[2]
+    if len(argv) != 3:
+        print("Usage: python simulation.py <athletes.csv> <commands.csv>")
+        return 1
 
-    timelines_by_nfc = load_athletes(athletes_csv)
-    process_commands(commands_csv, timelines_by_nfc)
+    athletes_csv_path = argv[1]
+    commands_csv_path = argv[2]
 
-    for tl in timelines_by_nfc.values():
-        durs = tl.durations_seconds()
-        parts = [tl.athlete.first_name, tl.athlete.last_name] + [fmt_seconds(x) for x in durs]
-        print(", ".join(parts))
+    try:
+        athletes = parse_athletes_csv(athletes_csv_path)
+        commands = parse_commands_csv(commands_csv_path)
+    except SimulationCSVError as error:
+        print(f"Input error: {error}")
+        return 1
+
+    config = WorkoutConfig(interval_distance=400, rest_time_seconds=60, laps_per_interval=1)
+    workout_id = 1
+
+    repository = InMemoryWorkoutRepository()
+    workout = Workout(
+        workout_id=workout_id,
+        intervalDistance=config.interval_distance,
+        lapsPerInterval=config.laps_per_interval,
+        startMode="GROUP",
+    )
+    repository.save(workout)
+
+    add_runner_use_case = AddRunnerToWorkoutUseCase(repository)
+    start_workout_use_case = StartWorkoutUseCase(repository)
+    scan_nfc_use_case = ScanNFCUseCase(repository)
+    scan_rfid_use_case = ScanRFIDUseCase(repository)
+
+    _register_runners(
+        athletes=athletes,
+        workout_id=workout_id,
+        add_runner_use_case=add_runner_use_case,
+        rest_seconds=config.rest_time_seconds,
+    )
+
+    _process_commands(
+        commands=commands,
+        workout_id=workout_id,
+        start_workout_use_case=start_workout_use_case,
+        scan_nfc_use_case=scan_nfc_use_case,
+        scan_rfid_use_case=scan_rfid_use_case,
+    )
+
+    updated_workout = repository.get_by_id(workout_id)
+    _print_runner_summary(updated_workout, athletes)
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
