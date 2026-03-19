@@ -50,19 +50,20 @@ class RunnerSession:
     # ---------------------------
 
     def start_interval(self, timestamp: Optional[str] = None) -> None:
-        """
-        Start running an interval when NFC scan occurs.
-        """
-        self.check_if_ready(timestamp)
+        # Start interval when NFC is scanned.
 
         if self.state == RunnerState.RUNNING:
             raise ValueError("Runner is already running")
-        if self.state == RunnerState.RESTING:
-            raise ValueError("Runner is resting and cannot start yet")
 
-        intervalNumber = len(self.intervals) + 1
         interval_start = timestamp if timestamp is not None else datetime.now().isoformat()
 
+        # If runner was resting, close that rest at this NFC scan time.
+        if self.state == RunnerState.RESTING:
+            currentRest = self.rests[-1]
+            if currentRest["end"] is None:
+                currentRest["end"] = interval_start
+
+        intervalNumber = len(self.intervals) + 1
         self.intervals.append({
             "intervalNumber": intervalNumber,
             "start": interval_start,
