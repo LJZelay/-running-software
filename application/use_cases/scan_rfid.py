@@ -10,7 +10,7 @@ class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scan
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository
     
-    def execute(self, workout_id: int, rfid_tag_id: str, timestamp: str) -> WorkoutStatusView:
+    def execute(self, workout_id: int, rfid_tag_id: str, timestamp: str, use_event_time: bool = False) -> WorkoutStatusView:
         validate_positive_int(workout_id, "workout_id")
         validate_non_empty_string(rfid_tag_id, "rfid_tag_id")
         validate_non_empty_string(timestamp, "timestamp")
@@ -20,7 +20,8 @@ class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scan
         if workout is None:
             raise WorkoutNotFoundError(f"Workout with id {workout_id} not found")
         
-        workout.record_rfid_event(rfid_tag_id)
+        event_timestamp = timestamp if use_event_time else None
+        workout.record_rfid_event(rfid_tag_id, event_timestamp)
         
         self.workout_repository.save(workout)
         

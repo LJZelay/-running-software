@@ -49,34 +49,38 @@ class RunnerSession:
     # Domain Behavior
     # ---------------------------
 
-    def start_interval(self) -> None:
-        """
-        Start running an interval when NFC scan occurs.
-        """
-        self.check_if_ready()
+    def start_interval(self, timestamp: Optional[str] = None) -> None:
+        # Start interval when NFC is scanned.
 
         if self.state == RunnerState.RUNNING:
             raise ValueError("Runner is already running")
+
+        interval_start = timestamp if timestamp is not None else datetime.now().isoformat()
+
+        # If runner was resting, close that rest at this NFC scan time.
         if self.state == RunnerState.RESTING:
-            raise ValueError("Runner is resting and cannot start yet")
+            currentRest = self.rests[-1]
+            if currentRest["end"] is None:
+                currentRest["end"] = interval_start
 
         intervalNumber = len(self.intervals) + 1
         self.intervals.append({
             "intervalNumber": intervalNumber,
-            "start": datetime.now().isoformat(),
+            "start": interval_start,
             "laps": [],
             "end": None
         })
         self.state = RunnerState.RUNNING
 
-    def record_lap(self) -> None:
+    def record_lap(self, timestamp: Optional[str] = None) -> None:
         """
         Record an RFID detection (a lap completion) while running.
         """
         if self.state != RunnerState.RUNNING:
             raise ValueError("Cannot record lap unless runner is running")
         currentInterval = self.intervals[-1]
-        currentInterval["laps"].append(datetime.now().isoformat())
+        lap_time = timestamp if timestamp is not None else datetime.now().isoformat()
+        currentInterval["laps"].append(lap_time)
 
     def should_finish_interval(self, lapsPerInterval: int) -> bool:
         """
@@ -87,23 +91,23 @@ class RunnerSession:
         currentInterval = self.intervals[-1]
         return len(currentInterval["laps"]) >= lapsPerInterval
 
-    def record_lap_and_update_state(self, lapsPerInterval: int) -> RunnerState:
+    def record_lap_and_update_state(self, lapsPerInterval: int, timestamp: Optional[str] = None) -> RunnerState:
         """
         Convenience method so application layer doesn't need to orchestrate finish logic.
         """
-        self.record_lap()
+        self.record_lap(timestamp)
         if self.should_finish_interval(lapsPerInterval):
-            self.finish_interval()
+            self.finish_interval(timestamp)
         return self.state
 
-    def finish_interval(self) -> None:
+    def finish_interval(self, timestamp: Optional[str] = None) -> None:
         """
         Finish current running interval and start rest.
         """
         if self.state != RunnerState.RUNNING:
             raise ValueError("Runner is not running")
 
-        now_iso = datetime.now().isoformat()
+        now_iso = timestamp if timestamp is not None else datetime.now().isoformat()
 
         currentInterval = self.intervals[-1]
         currentInterval["end"] = now_iso
@@ -115,7 +119,7 @@ class RunnerSession:
         })
         self.state = RunnerState.RESTING
 
-    def check_if_ready(self) -> None:
+    def check_if_ready(self, now: Optional[str] = None) -> None:
         """
         Check if runner is ready to start a new interval (rest period over).
         """
@@ -124,11 +128,12 @@ class RunnerSession:
 
         currentRest = self.rests[-1]
         startTime = datetime.fromisoformat(currentRest["start"])
-        elapsed = (datetime.now() - startTime).total_seconds()
+        now_dt = datetime.fromisoformat(now) if now is not None else datetime.now()
+        elapsed = (now_dt - startTime).total_seconds()
 
         if elapsed >= currentRest["restDuration"]:
             if currentRest["end"] is None:
-                currentRest["end"] = datetime.now().isoformat()
+                currentRest["end"] = now_dt.isoformat()
             self.state = RunnerState.READY
 
     # UI concern, might remove later

@@ -47,20 +47,20 @@ class Workout:
     # Domain Behavior
     # ---------------------------
 
-    def start(self) -> bool:
+    def start(self, timestamp: Optional[str] = None) -> bool:
         """Coach activates workout, system begins accepting NFC/RFID events."""
         if self.status != WorkoutState.NOT_STARTED:
             return False
         self.status = WorkoutState.ACTIVE
-        self.startTime = datetime.now().isoformat()
+        self.startTime = timestamp if timestamp is not None else datetime.now().isoformat()
         return True
 
-    def end(self) -> bool:
+    def end(self, timestamp: Optional[str] = None) -> bool:
         """Workout ended by coach, finalize sessions."""
         if self.status == WorkoutState.COMPLETED:
             return False
         self.status = WorkoutState.COMPLETED
-        self.endTime = datetime.now().isoformat()
+        self.endTime = timestamp if timestamp is not None else datetime.now().isoformat()
         return True
 
     def add_runner_session(self, rs: RunnerSession) -> bool:
@@ -69,7 +69,13 @@ class Workout:
         self.runnerSessions.append(rs)
         return True
 
-    def record_nfc_start(self, nfc_tag: str) -> None:
+    def is_not_started(self) -> bool:
+        return self.status == WorkoutState.NOT_STARTED
+
+    def is_active(self) -> bool:
+        return self.status == WorkoutState.ACTIVE
+
+    def record_nfc_start(self, nfc_tag: str, timestamp: Optional[str] = None) -> None:
         """Runner scans NFC to start an interval."""
         if self.status != WorkoutState.ACTIVE:
             raise ValueError("Workout is not active")
@@ -78,9 +84,9 @@ class Workout:
         if rs is None:
             raise ValueError("Unknown NFC tag")
 
-        rs.start_interval()
+        rs.start_interval(timestamp)
 
-    def record_rfid_event(self, rfid_tag: str) -> RunnerState:
+    def record_rfid_event(self, rfid_tag: str, timestamp: Optional[str] = None) -> RunnerState:
         """
         RFID detection while running.
         RunnerSession owns the finish logic now.
@@ -93,7 +99,7 @@ class Workout:
             raise ValueError("Unknown RFID tag")
 
         # moved finish orchestration into session
-        return rs.record_lap_and_update_state(self.lapsPerInterval)
+        return rs.record_lap_and_update_state(self.lapsPerInterval, timestamp)
 
     def get_rest_screen(self) -> List[dict]:
         """
