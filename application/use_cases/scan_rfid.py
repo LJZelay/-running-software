@@ -5,8 +5,7 @@ from application.dto.workout_status_view import WorkoutStatusView
 from application.mappers import WorkoutStatusMapper
 
 
-class ScanRFIDUseCase:
-    """Use case for handling RFID tag scans during a running interval."""
+class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scanned to start a runner's activity in a workout. It validates the input, retrieves the workout, records the RFID start, saves the workout, and returns the updated workout status.
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository

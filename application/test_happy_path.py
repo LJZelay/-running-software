@@ -9,7 +9,7 @@ from application.use_cases.scan_rfid import ScanRFIDUseCase
 from application.use_cases.get_rest_screen import GetRestScreenUseCase
 from application.use_cases.end_workout import EndWorkoutUseCase
 
-# This test simulates a happy path scenario for an interval workout. It creates a workout with two runners, starts the workout, simulates NFC and RFID scans for one runner, checks the rest screen data, ends the workout, and verifies that the workout status is updated to COMPLETED.
+# This test simulates a happy path scenario for an interval workout. It creates a workout with two runners, starts the workout, simulates NFC and RFID scans for one runner, checks the rest screen data, ends the workout, and verifies that the workout status is updated to COMPLETED. Assertions are used throughout to ensure that the expected outcomes are met at each step.
 
 def test_happy_path_interval_workout() -> None:
     runner1 = Runner(
