@@ -4,6 +4,7 @@ from application.input_validation import validate_positive_int
 
 
 class EndWorkoutUseCase:
+    """Use case for ending a workout."""
     
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository

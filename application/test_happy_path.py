@@ -1,6 +1,7 @@
 from domain.runner import Runner
 from domain.runnerSession import RunnerSession
 from domain.workout import Workout
+from domain.workoutState import WorkoutState
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
 from application.use_cases.start_workout import StartWorkoutUseCase
 from application.use_cases.scan_nfc import ScanNFCUseCase
@@ -50,7 +51,7 @@ def test_happy_path_interval_workout() -> None:
     scan_nfc_use_case = ScanNFCUseCase(repository)
     status1 = scan_nfc_use_case.execute(100, "NFC001", "2026-02-08T10:00:00")
     assert status1.workout_id == 100
-    assert status1.workout_state == "ACTIVE"
+    assert status1.workout_state == WorkoutState.ACTIVE.value
     assert status1.active_runner_count == 1
     assert status1.resting_runner_count == 0
     
@@ -79,7 +80,7 @@ def test_happy_path_interval_workout() -> None:
     assert ended == True
     
     final_workout = repository.get_by_id(100)
-    assert final_workout.status == "COMPLETED"
+    assert final_workout.status == WorkoutState.COMPLETED
 
 
 if __name__ == "__main__":
@@ -90,3 +91,4 @@ if __name__ == "__main__":
         print(f"✗ Happy path test FAILED: {e}")
         import traceback
         traceback.print_exc()
+

@@ -9,7 +9,8 @@ class WorkoutStatusMapper:
         
         return WorkoutStatusView(
             workout_id=workout.workout_id,
-            workout_state=workout.status,
+            workout_state=workout.status.value,
             active_runner_count=active_count,
             resting_runner_count=resting_count
         )
+

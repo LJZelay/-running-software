@@ -18,16 +18,23 @@ class GetRestScreenUseCase: #Use case for retrieving the rest screen information
         if workout is None:
             raise WorkoutNotFoundError(f"Workout with id {workout_id} not found")
         
-        rest_data = workout.get_rest_screen()
+        # Get resting runner sessions from domain
+        resting_sessions = workout.get_resting_runner_sessions()
         
+        # Update their ready status and convert to DTOs
         views = []
-        for data in rest_data:
+        for session in resting_sessions:
+            session.check_if_ready()
             view = RunnerRestView(
-                runner_id=data["runner_id"],
-                runner_name=data["runner_name"],
-                remaining_rest_seconds=data["remaining_seconds"],
-                is_ready_to_run=(data["remaining_seconds"] <= 0)
+                runner_id=session.runner.id,
+                runner_name=session.runner.name,
+                # Change this from session's job to some UI logic later
+                remaining_rest_seconds=session.get_remaining_rest_seconds(),
+                is_ready_to_run=session.is_ready()
             )
             views.append(view)
+        
+        # Sort by remaining seconds, uncomment when doable
+        views.sort(key=lambda v: v.remaining_rest_seconds)
         
         return views

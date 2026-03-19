@@ -1,61 +1,27 @@
-"""
-THIS FILE SHOULD BE DELETED
-
-CSV parsing has been moved to externalInterface/csv_roster_parser.py to achieve
-proper separation of concerns and improve code quality:
-
-COHESION - Why External Layer is Better:
------------------------------------------
-1. Format Agnostic Application
-   - Application doesn't care if data comes from CSV, JSON, XML, or database
-   - Can swap between formats without changing application code
-   - Example: Switch from CSV to JSON by creating JSONRosterParser without touching application
-
-2. Single Responsibility Principle
-   - externalInterface handles format-specific concerns (CSV parsing, normalization, validation)
-   - application handles business orchestration (creating domain objects, managing workflows)
-   - No mixing of technical infrastructure with business logic
-
-3. Format-Specific Details Stay Out of Application
-   - CSV header variants ("nfc_id" vs "nfc" vs "nfc_tag") are infrastructure concerns
-   - Row-by-row parsing logic is not business logic
-   - These belong in the infrastructure layer, not the business layer
-
-4. Coupling Reduction
-   - Application was tightly coupled to CSV structure
-   - externalInterface provides format-agnostic RosterData interface
-   - Application only sees domain objects (Runner, RunnerSession), not CSV details
-
-5. Testability
-   - Can test CSV parsing independently without involving application layer
-   - Can test application with mock RosterData objects
-   - Easier to add new formats (JSON, XML) without regression testing application
-
-CURRENT STRUCTURE:
-==================
-✓ externalInterface/csv_roster_parser.py: CSVRosterParser + RosterData (format-specific)
-✓ application/csvWorkoutImporter.py: Orchestration (format-agnostic, uses RosterData)
-✓ controller/cli.py: Updated imports from externalInterface
-
-DELETE THIS FILE - It violates the cohesion principle by mixing format-specific 
-parsing with the application layer.
-"""
-
 import csv
 import io
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
-
-from domain.runner import Runner
-from domain.runnerSession import RunnerSession
 
 
 class CSVInputError(Exception):
     pass
 
 
-class CSVInputParser:
+@dataclass
+class RosterData:
+    """Immutable data class for roster entry (not a domain entity)"""
+    name: str
+    nfc_id: str
+    rfid_id: str
+    email: Optional[str] = None
+
+
+class CSVRosterParser:
     """
-    Parses a CSV roster and converts it into domain objects.
+    Parses a CSV roster and converts it into RosterData objects.
+    Format-agnostic from the application perspective.
     """
 
     REQUIRED_COLUMNS = {"name", "nfc_id", "rfid_id"}  # normalized names
@@ -69,17 +35,17 @@ class CSVInputParser:
     # Parsing
     # ---------------------------
 
-    def parse_csv_file(self, file_path: str) -> List[Dict[str, str]]:
+    def parse_csv_file(self, file_path: str) -> List[RosterData]:
         try:
             with open(file_path, "r", newline="", encoding="utf-8") as f:
                 return self._parse_csv_content(f)
         except FileNotFoundError:
             raise CSVInputError(f"File not found: {file_path}")
 
-    def parse_csv_string(self, csv_string: str) -> List[Dict[str, str]]:
+    def parse_csv_string(self, csv_string: str) -> List[RosterData]:
         return self._parse_csv_content(io.StringIO(csv_string))
 
-    def _parse_csv_content(self, file_obj) -> List[Dict[str, str]]:
+    def _parse_csv_content(self, file_obj) -> List[RosterData]:
         self.validation_errors.clear()
         self.warnings.clear()
 
@@ -98,7 +64,7 @@ class CSVInputParser:
         if self.validation_errors and self.strict_validation:
             raise CSVInputError(self.validation_errors[0])
 
-        processed_rows: List[Dict[str, str]] = []
+        processed_rows: List[RosterData] = []
         for i, row in enumerate(rows, start=1):
             try:
                 processed_rows.append(self._process_row(row, i))
@@ -137,10 +103,9 @@ class CSVInputParser:
             if required not in present:
                 self.validation_errors.append(f"Missing required column: {required}")
 
-    def _process_row(self, row: Dict[str, Any], row_num: int) -> Dict[str, str]:
+    def _process_row(self, row: Dict[str, Any], row_num: int) -> RosterData:
         """
-        Convert a DictReader row to normalized field dict:
-          name, nfc_id, rfid_id, email(optional)
+        Convert a DictReader row to RosterData object.
         """
         # Normalize keys/values
         normalized_row: Dict[str, str] = {}
@@ -174,52 +139,24 @@ class CSVInputParser:
             if "@" not in normalized_row["email"]:
                 raise CSVInputError(f"Row {row_num}: Invalid email '{normalized_row['email']}'")
 
-        return normalized_row
+        return RosterData(
+            name=normalized_row["name"],
+            nfc_id=normalized_row["nfc_id"],
+            rfid_id=normalized_row["rfid_id"],
+            email=normalized_row.get("email")
+        )
 
-    # ---------------------------
-    # Domain object creation
-    # ---------------------------
-
-    def create_runners(self, csv_rows: List[Dict[str, str]], starting_id: int = 1) -> List[Runner]:
+    def validate_unique_tags(self, roster_data: List[RosterData]) -> Tuple[bool, List[str]]:
         """
-        Create Runner objects from parsed CSV rows.
-        Runner IDs are generated incrementally.
-        """
-        runners: List[Runner] = []
-        for i, row in enumerate(csv_rows):
-            runners.append(
-                Runner(
-                    runner_id=starting_id + i,
-                    name=row["name"],
-                    email=row.get("email", ""),  # optional
-                    nfc_tag=row["nfc_id"],
-                    rfid_tag=row["rfid_id"],
-                )
-            )
-        return runners
-
-    def create_runner_sessions(
-        self,
-        runners: List[Runner],
-        default_rest_duration: int,
-    ) -> List[RunnerSession]:
-        """
-        Create RunnerSession objects with a default rest duration.
-        You can override per runner later if you want.
-        """
-        return [RunnerSession(runner=r, restDuration=default_rest_duration) for r in runners]
-
-    def validate_unique_tags(self, csv_rows: List[Dict[str, str]]) -> Tuple[bool, List[str]]:
-        """
-        Optional helper: check for duplicate NFC/RFID values.
+        Check for duplicate NFC/RFID values.
         """
         errors: List[str] = []
         seen_nfc = set()
         seen_rfid = set()
 
-        for i, row in enumerate(csv_rows, start=1):
-            nfc = row["nfc_id"]
-            rfid = row["rfid_id"]
+        for i, data in enumerate(roster_data, start=1):
+            nfc = data.nfc_id
+            rfid = data.rfid_id
 
             if nfc in seen_nfc:
                 errors.append(f"Row {i}: Duplicate NFC ID '{nfc}'")
