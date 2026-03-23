@@ -176,3 +176,6 @@ class TestIntervalWorkoutFlow:
         assert len(rest_views) == 1
         assert rest_views[0].runner_name == athlete.name
         assert rest_views[0].remaining_rest_seconds > 0
+
+        print("All integration tests passed successfully!")
+        print("Pytest percentages (e.g., 55%) show test progress, not a score.")

@@ -1,111 +1,90 @@
-# CSE 4504 Team Project
+# CSE 4504 Team Project (Team 4)
 
-## Work Assignments 
+## Team
 
-Feature 1 implementation:
-Cliff - Runner Object - Domain Layer
-Lesly - Workout Object - Application Layer
-Joel - csvInput within aplication layer
+- Lesly
+- Joel
+- Cliff
+- La'Mia 
 
-CLI implementation:
-Lesly - WorkoutService - Application Layer
-Joel - WorkoutController - Controller Layer
-cliff - check for any errors -User experience and testing
+## What you need
 
-## Developer's Guide
+- Python 3.11+ recommended
+- pip
 
-### Prerequisites
+## Setup
 
-This project requires Python 3.7 or higher. No external dependencies are needed—the application uses only Python standard libraries.
+Run from the project root:
 
-To check your Python version:
 ```bash
-python --version
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-### Installation
+## Run the program
 
-1. **Clone the repository** (if you haven't already):
-   ```bash
-   git clone <repository-url>
-   cd team-project-team4
-   ```
+### 1) Demo flow
 
-2. **No additional dependencies to install** - The project uses only Python standard libraries:
-   - `datetime` - For timestamp handling
-   - `typing` - For type hints
-   - `abc` - For abstract base classes
-
-### Running the Application
-
-#### Main Command Line Application
-
-To run the main demonstration program with hardcoded use case examples:
+Runs a built-in interval workout example:
 
 ```bash
 python main.py
 ```
 
-This will execute all five use cases in sequence and display their outputs:
-- Start Workout
-- Scan NFC Tag (runner starts interval)
-- Scan RFID Tag (lap detection)
-- Get Rest Screen (view resting runners)
-- End Workout
+### 2) CSV simulation flow
 
-**Expected Output:** A formatted demonstration showing input parameters and return values for each use case.
-
-#### Running Tests
-
-To run the happy path integration test:
+Uses athletes and event input files:
 
 ```bash
-python -m application.test_happy_path
+python simulation.py data/athletes.csv data/events.csv
 ```
 
-Or use the quick test command:
+### 3) CLI
+
+Interactive mode:
+
 ```bash
-python -c "import sys; sys.path.insert(0, '.'); from application.test_happy_path import test_happy_path_interval_workout; test_happy_path_interval_workout(); print('✓ Happy path test PASSED')"
+python controller/cli.py
 ```
 
-**Expected Output:** `✓ Happy path test PASSED`
+One-command mode examples:
 
-### Project Structure
-
-```
-team-project-team4/
-├── main.py                     # Main entry point (demonstration)
-├── domain/                     # Business logic layer
-│   ├── runner.py              # Runner entity
-│   ├── runnerSession.py       # Runner session entity
-│   └── workout.py             # Workout entity
-├── application/               # Application/use case layer
-│   ├── use_cases/            # Use case implementations
-│   │   ├── start_workout.py
-│   │   ├── scan_nfc.py
-│   │   ├── scan_rfid.py
-│   │   ├── get_rest_screen.py
-│   │   └── end_workout.py
-│   ├── dto/                  # Data transfer objects
-│   ├── repositories/         # Repository interfaces & implementations
-│   ├── exceptions.py         # Application-level exceptions
-│   ├── input_validation.py   # Input validation utilities
-│   └── test_happy_path.py   # Integration tests
-├── controller/               # Controller layer (future implementation)
-└── externalInterface/        # External interfaces (future implementation)
+```bash
+python controller/cli.py help
+python controller/cli.py "2 data/athletes.csv"
+python controller/cli.py "status"
 ```
 
-### Troubleshooting
+## Run tests
 
-**Import Errors:**
-- Make sure you're running commands from the project root directory
-- Python must be able to find the project modules (current directory should be in `sys.path`)
+Run all tests:
 
-**Python Version Issues:**
-- Ensure you're using Python 3.7+ (required for type hints and dataclass features)
+```bash
+pytest
+```
 
-### Additional Documentation
+Optional (single test file):
 
-- [Application Contract](application/APPLICATION_CONTRACT.md) - Application layer responsibilities and guarantees
-- [Domain Changes Note](DOMAIN_CHANGES_NOTE.md) - Recent domain implementation details
-- Layer-specific READMEs in each directory (`domain/`, `application/`, etc.) and also specific of what was implemented in application.
+```bash
+pytest tests/test_integration/test_workout_flow.py
+```
+
+Note: pytest percentages (example: 55%) show progress through collected tests, not a grade.
+
+## Directory guide
+
+- `application/` - use cases, DTOs, validation, repositories
+- `controller/` - command-line controller and command handling
+- `domain/` - core business entities and state
+- `externalInterface/` - CSV parsing and external adapters
+- `data/` - sample CSV files (athletes, events, summaries)
+- `tests/` and `test/` - automated tests
+- `.github/workflows/` - CI workflow (runs pytest)
+- `main.py` - simple end-to-end demo
+- `simulation.py` - CSV-driven simulation entry point
+
+## Included docs
+
+- [Application Contract](application/APPLICATION_CONTRACT.md)
+- [Application Notes](application/README.md)
+- [Controller Notes](controller/README.md)
