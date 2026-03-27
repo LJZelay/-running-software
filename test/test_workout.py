@@ -44,15 +44,17 @@ def test_workout_start():
 def test_rfid_completes_interval():
     workout, session = create_workout_with_runner()
 
-    workout.record_nfc_start("NFC1")
+    workout.record_nfc_start("NFC1", "2026-02-08T10:00:00")
 
-    workout.record_rfid_event("RFID1")
-    workout.record_rfid_event("RFID1")
+    workout.record_rfid_event("RFID1", "2026-02-08T10:00:01")
+    workout.record_rfid_event("RFID1", "2026-02-08T10:00:02")
 
     assert session.state == RunnerState.RESTING
 
-def test_unknown_rfid_raises_error():
+def test_unknown_rfid_is_ignored_without_mutation():
     workout, _ = create_workout_with_runner()
 
-    with pytest.raises(ValueError):
-        workout.record_rfid_event("UNKNOWN")
+    result = workout.record_rfid_event("UNKNOWN")
+
+    assert result.decision == "ignored"
+    assert result.reason == "unknown_tag"

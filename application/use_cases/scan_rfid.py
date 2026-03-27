@@ -6,6 +6,7 @@ from application.input_validation import validate_positive_int, validate_non_emp
 from application.dto.rfid_scan_result_view import RFIDScanResultView
 from application.mappers import WorkoutStatusMapper
 from application.rfid_contracts import RFIDDecision, RFIDReason
+from domain.rfid_event_result import ACCEPTED_DECISION
 
 
 class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scanned to start a runner's activity in a workout. It validates the input, retrieves the workout, records the RFID start, saves the workout, and returns the updated workout status.
@@ -24,14 +25,15 @@ class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scan
             raise WorkoutNotFoundError(f"Workout with id {workout_id} not found")
         
         event_timestamp = timestamp if use_event_time else None
-        workout.record_rfid_event(rfid_tag_id, event_timestamp)
-        
-        self.workout_repository.save(workout)
+        event_result = workout.record_rfid_event(rfid_tag_id, event_timestamp)
+
+        if event_result.decision == ACCEPTED_DECISION:
+            self.workout_repository.save(workout)
         
         status_view = WorkoutStatusMapper.from_workout(workout)
         return RFIDScanResultView(
             event_id=str(uuid4()),
-            decision=RFIDDecision.ACCEPTED,
-            reason=RFIDReason.VALID_FINISH,
+            decision=RFIDDecision(event_result.decision),
+            reason=RFIDReason(event_result.reason),
             workout_status=status_view,
         )

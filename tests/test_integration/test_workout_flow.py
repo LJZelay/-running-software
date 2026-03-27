@@ -1,5 +1,6 @@
 """Integration tests for complete workout flow."""
 import pytest
+from datetime import datetime, timedelta
 from pathlib import Path
 import csv
 from domain.runner import Runner
@@ -80,7 +81,12 @@ class TestIntervalWorkoutFlow:
         
         # Simulate 4 lap completions
         for i in range(4):
-            status = scan_rfid_use_case.execute(100, runner.rfid_tag, f"2026-02-08T10:00:{5+i*5:02d}")
+            status = scan_rfid_use_case.execute(
+                100,
+                runner.rfid_tag,
+                f"2026-02-08T10:00:{5+i*5:02d}",
+                use_event_time=True,
+            )
         
         # After 4th lap, runner should be resting
         assert status.active_runner_count == 0
@@ -139,6 +145,8 @@ class TestIntervalWorkoutFlow:
 
     def test_rest_screen_shows_correct_runner_info(self):
         """Test that rest screen displays correct runner data during rest."""
+        base_time = datetime.now().replace(microsecond=0)
+
         # Load athlete data from CSV
         athlete = load_athletes_from_csv(limit=1)[0]
         
@@ -162,12 +170,17 @@ class TestIntervalWorkoutFlow:
         
         # Scan NFC to start running
         scan_nfc_use_case = ScanNFCUseCase(repository)
-        scan_nfc_use_case.execute(300, athlete.nfc_tag, "2026-02-08T10:00:00")
+        scan_nfc_use_case.execute(300, athlete.nfc_tag, base_time.isoformat())
         
         # Record 4 laps to finish interval and move to rest
         scan_rfid_use_case = ScanRFIDUseCase(repository)
         for i in range(4):
-            scan_rfid_use_case.execute(300, athlete.rfid_tag, f"2026-02-08T10:00:{5+i*5:02d}")
+            scan_rfid_use_case.execute(
+                300,
+                athlete.rfid_tag,
+                (base_time + timedelta(seconds=5 + i * 5)).isoformat(),
+                use_event_time=True,
+            )
         
         # Get rest screen
         get_rest_screen_use_case = GetRestScreenUseCase(repository)
