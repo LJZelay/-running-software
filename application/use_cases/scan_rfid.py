@@ -1,8 +1,11 @@
+from uuid import uuid4
+
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int, validate_non_empty_string
-from application.dto.workout_status_view import WorkoutStatusView
+from application.dto.rfid_scan_result_view import RFIDScanResultView
 from application.mappers import WorkoutStatusMapper
+from application.rfid_contracts import RFIDDecision, RFIDReason
 
 
 class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scanned to start a runner's activity in a workout. It validates the input, retrieves the workout, records the RFID start, saves the workout, and returns the updated workout status.
@@ -10,7 +13,7 @@ class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scan
     def __init__(self, workout_repository: WorkoutRepository) -> None:
         self.workout_repository = workout_repository
     
-    def execute(self, workout_id: int, rfid_tag_id: str, timestamp: str, use_event_time: bool = False) -> WorkoutStatusView:
+    def execute(self, workout_id: int, rfid_tag_id: str, timestamp: str, use_event_time: bool = False) -> RFIDScanResultView:
         validate_positive_int(workout_id, "workout_id")
         validate_non_empty_string(rfid_tag_id, "rfid_tag_id")
         validate_non_empty_string(timestamp, "timestamp")
@@ -25,4 +28,10 @@ class ScanRFIDUseCase: #Use case for handling the logic when an RFID tag is scan
         
         self.workout_repository.save(workout)
         
-        return WorkoutStatusMapper.from_workout(workout)
+        status_view = WorkoutStatusMapper.from_workout(workout)
+        return RFIDScanResultView(
+            event_id=str(uuid4()),
+            decision=RFIDDecision.ACCEPTED,
+            reason=RFIDReason.VALID_FINISH,
+            workout_status=status_view,
+        )
