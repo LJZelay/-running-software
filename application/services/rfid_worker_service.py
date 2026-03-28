@@ -42,16 +42,16 @@ class WorkerHealthStatus:
 class RFIDWorkerService:
     """
     Thread-safe RFID event processing service.
-    
+
     - Single ingest thread queues events (non-blocking, drop-oldest on overflow)
     - Single worker thread processes events serially (mutations only)
     - Coarse-grained lock protects all shared state during mutation
     - Worker crash stops ingest and halts processing
-    
+
     Design:
     - Lock guards: workout, runner sessions, all mutable state
     - Worker calls execute() on each queued event (via callback function)
-    - Ingest thread calls enqueue_event() (lock-free, queue operation only)
+    - Ingest path calls enqueue_event() (lock-free queue operation)
     - Coach/display reads lock briefly for status queries
     """
     
@@ -91,7 +91,6 @@ class RFIDWorkerService:
         self._event_queue: queue.Queue = queue.Queue(maxsize=config.queue_size)
         
         # Thread management
-        self._ingest_thread: Optional[threading.Thread] = None
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         
