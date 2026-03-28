@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from typing import List, Optional, Any, Dict, Union
 from domain.runner import Runner
 from domain.rfid_event_result import (
@@ -11,6 +12,9 @@ from domain.rfid_event_result import (
     VALID_FINISH_REASON,
 )
 from domain.runnerState import RunnerState
+
+
+logger = logging.getLogger(__name__)
 
 
 class RunnerSession:
@@ -39,6 +43,7 @@ class RunnerSession:
         intervals: Optional[List[Dict[str, Any]]] = None,
         rests: Optional[List[Dict[str, Any]]] = None,
         lastAcceptedRfidEpochMs: Optional[int] = None,
+        lastAcceptedNfcEpochMs: Optional[int] = None,
     ):
         self.runner = runner
         self.restDuration = restDuration
@@ -55,6 +60,7 @@ class RunnerSession:
         self.intervals = [] if intervals is None else intervals
         self.rests = [] if rests is None else rests
         self.lastAcceptedRfidEpochMs = lastAcceptedRfidEpochMs
+        self.lastAcceptedNfcEpochMs = lastAcceptedNfcEpochMs
 
     # ---------------------------
     # Domain Behavior
@@ -88,6 +94,45 @@ class RunnerSession:
             "end": None
         })
         self.state = RunnerState.RUNNING
+
+    def process_nfc_start(self, timestamp: Optional[str] = None, debounce_ms: int = 200) -> bool:
+        """Apply NFC acceptance rules before starting an interval."""
+        resolved = self._resolve_iso_and_epoch(timestamp)
+        if resolved is None:
+            logger.info(
+                "event=nfc_start decision=ignored reason=invalid_timestamp runner_id=%s nfc_tag=%s",
+                self.runner.id,
+                self.runner.nfc_tag,
+            )
+            return False
+
+        start_iso, start_epoch_ms = resolved
+
+        if self.lastAcceptedNfcEpochMs is not None:
+            if start_epoch_ms < self.lastAcceptedNfcEpochMs:
+                logger.info(
+                    "event=nfc_start decision=ignored reason=out_of_order_timestamp runner_id=%s nfc_tag=%s",
+                    self.runner.id,
+                    self.runner.nfc_tag,
+                )
+                return False
+
+            if (start_epoch_ms - self.lastAcceptedNfcEpochMs) < debounce_ms:
+                logger.info(
+                    "event=nfc_start decision=ignored reason=duplicate_within_window runner_id=%s nfc_tag=%s",
+                    self.runner.id,
+                    self.runner.nfc_tag,
+                )
+                return False
+
+        self.start_interval(start_iso)
+        self.lastAcceptedNfcEpochMs = start_epoch_ms
+        logger.info(
+            "event=nfc_start decision=accepted reason=valid_start runner_id=%s nfc_tag=%s",
+            self.runner.id,
+            self.runner.nfc_tag,
+        )
+        return True
 
     def record_lap(self, timestamp: Optional[str] = None) -> None:
         """
@@ -237,6 +282,7 @@ class RunnerSession:
             "intervals": self.intervals,
             "rests": self.rests,
             "lastAcceptedRfidEpochMs": self.lastAcceptedRfidEpochMs,
+            "lastAcceptedNfcEpochMs": self.lastAcceptedNfcEpochMs,
         }
 
     @classmethod
@@ -248,4 +294,5 @@ class RunnerSession:
             intervals=data.get("intervals"),
             rests=data.get("rests"),
             lastAcceptedRfidEpochMs=data.get("lastAcceptedRfidEpochMs"),
+            lastAcceptedNfcEpochMs=data.get("lastAcceptedNfcEpochMs"),
         )

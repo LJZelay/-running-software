@@ -518,6 +518,7 @@ class IntervalTrainingCLI:
             raw_timestamp_ms=payload.timestamp_ms,
             source=payload.source,
             reader_id=payload.reader_id,
+            max_drift_ms=self.rfid_runtime_config.max_drift_ms,
         )
         self.rfid_worker_service.enqueue_event(envelope)
 

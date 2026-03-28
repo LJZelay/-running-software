@@ -85,7 +85,7 @@ class Workout:
         if rs is None:
             raise ValueError("Unknown NFC tag")
 
-        rs.start_interval(timestamp)
+        rs.process_nfc_start(timestamp=timestamp)
 
     def record_rfid_event(self, rfid_tag: str, timestamp: Optional[str] = None, debounce_ms: int = 200) -> RFIDEventResult:
         """

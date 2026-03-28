@@ -421,3 +421,69 @@ def test_callback_exception_isolation(runtime_config):
     assert "ValueError" in (status.last_error or ""), "Error should be logged"
     
     service.stop()
+
+
+def test_queue_pressure_metrics_increase_under_burst(runtime_config):
+    """Queue metrics should reflect pressure and drops during sustained burst ingest."""
+
+    def slow_callback(_event):
+        time.sleep(0.03)
+        return {"decision": "accepted"}
+
+    service = RFIDWorkerService(runtime_config, slow_callback)
+    service.start()
+
+    for i in range(60):
+        event = RFIDEventEnvelope(
+            event_id=f"pressure-{i}",
+            event_type=HardwareEventType.RFID,
+            tag_id=f"tag-{i}",
+            timestamp_ms=1_000_000 + i,
+            ingest_time_ms=1_000_100 + i,
+            source="reader-1",
+        )
+        service.enqueue_event(event)
+
+    time.sleep(0.6)
+
+    status = service.get_health_status()
+    assert status.events_dropped > 0
+    assert 0.0 <= status.queue_utilization_percent <= 100.0
+    assert status.queue_drops_per_minute > 0.0
+
+    service.stop()
+
+
+def test_queue_overflow_logs_dropped_event_metadata(runtime_config, caplog):
+    """Overflow callback failures and dropped-event metadata should be observable in logs."""
+
+    def slow_callback(_event):
+        time.sleep(0.05)
+        return {"decision": "accepted"}
+
+    dropped = []
+
+    def overflow_callback(event):
+        dropped.append(event.event_id)
+
+    service = RFIDWorkerService(runtime_config, slow_callback, overflow_event_callback=overflow_callback)
+    service.start()
+
+    with caplog.at_level("DEBUG"):
+        for i in range(30):
+            event = RFIDEventEnvelope(
+                event_id=f"overflow-{i}",
+                event_type=HardwareEventType.RFID,
+                tag_id=f"tag-{i}",
+                timestamp_ms=1_000_000 + i,
+                ingest_time_ms=1_000_100 + i,
+                source="reader-1",
+            )
+            service.enqueue_event(event)
+
+        time.sleep(0.4)
+
+    assert len(dropped) > 0
+    assert "Queue full, dropped oldest event" in caplog.text
+
+    service.stop()

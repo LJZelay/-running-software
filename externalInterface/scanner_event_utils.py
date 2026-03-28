@@ -70,6 +70,7 @@ def build_event_envelope(
     source: str,
     reader_id: Optional[str] = None,
     ingest_time_ms: Optional[int] = None,
+    max_drift_ms: int = 10_000,
 ) -> RFIDEventEnvelope:
     normalized_event_type = event_type.strip().upper()
     if normalized_event_type not in {HardwareEventType.RFID.value, HardwareEventType.NFC.value}:
@@ -80,6 +81,15 @@ def build_event_envelope(
 
     event_timestamp_ms = parse_timestamp_ms(raw_timestamp_ms)
     resolved_ingest_time_ms = now_epoch_ms() if ingest_time_ms is None else parse_timestamp_ms(ingest_time_ms)
+
+    if event_timestamp_ms <= 0:
+        raise ValueError("timestamp_ms must be positive")
+
+    if resolved_ingest_time_ms <= 0:
+        raise ValueError("ingest_time_ms must be positive")
+
+    if abs(event_timestamp_ms - resolved_ingest_time_ms) > max_drift_ms:
+        raise ValueError("timestamp drift exceeds max_drift_ms")
 
     return RFIDEventEnvelope(
         event_id=str(uuid4()),

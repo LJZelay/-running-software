@@ -1,6 +1,8 @@
 from types import SimpleNamespace
+import time
 
 from application.rfid_contracts import HardwareEventType, RFIDEventEnvelope
+from externalInterface.scanner_adapter import ScannerPayload
 from controller import cli as cli_module
 
 
@@ -80,5 +82,73 @@ def test_cli_runs_without_hardware_configuration(monkeypatch):
     assert cli.hardware_nfc_adapter is None
     assert cli.hardware_rfid_adapter is None
     assert cli.rfid_worker_service is not None
+
+    cli.cmd_exit([])
+
+
+def test_on_hardware_scanner_payload_enqueues_normalized_event():
+    cli = cli_module.IntervalTrainingCLI()
+
+    captured = []
+
+    class _StubWorkerService:
+        def enqueue_event(self, event):
+            captured.append(event)
+            return True
+
+        def stop(self):
+            return None
+
+    cli.rfid_worker_service = _StubWorkerService()
+    now_ms = int(time.time() * 1000)
+
+    payload = ScannerPayload(
+        event_type="rfid",
+        tag_id=" 00-ab:cd ",
+        timestamp_ms=now_ms,
+        source="reader_hardware.rest",
+        reader_id="reader-1",
+    )
+
+    cli._on_hardware_scanner_payload(payload)
+
+    assert len(captured) == 1
+    envelope = captured[0]
+    assert envelope.event_type == HardwareEventType.RFID
+    assert envelope.tag_id == "ABCD"
+    assert envelope.source == "reader_hardware.rest"
+    assert envelope.reader_id == "reader-1"
+
+    cli.cmd_exit([])
+
+
+def test_on_hardware_scanner_payload_invalid_timestamp_raises_and_does_not_enqueue():
+    cli = cli_module.IntervalTrainingCLI()
+
+    enqueue_calls = []
+
+    class _StubWorkerService:
+        def enqueue_event(self, event):
+            enqueue_calls.append(event)
+            return True
+
+        def stop(self):
+            return None
+
+    cli.rfid_worker_service = _StubWorkerService()
+    payload = ScannerPayload(
+        event_type="rfid",
+        tag_id="ABCD",
+        timestamp_ms=0,
+        source="reader_hardware.rest",
+    )
+
+    try:
+        cli._on_hardware_scanner_payload(payload)
+        assert False, "Expected ValueError for invalid timestamp"
+    except ValueError as exc:
+        assert "timestamp_ms must be positive" in str(exc)
+
+    assert len(enqueue_calls) == 0
 
     cli.cmd_exit([])
