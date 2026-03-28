@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -153,3 +153,155 @@ def test_scan_rfid_uses_host_clock_when_event_time_disabled(monkeypatch):
     assert saved is not None
     interval_end = saved.runnerSessions[0].intervals[0]["end"]
     assert interval_end == fixed_now.isoformat()
+
+
+@pytest.mark.integration
+def test_duplicate_nfc_within_window_is_ignored_without_extra_interval():
+    runner = _build_runner(1, "Alice", "NFC001", "RFID001")
+    repo = _seed_workout_with_runners(605, 1, [runner])
+
+    StartWorkoutUseCase(repo).execute(605)
+    scan_nfc_uc = ScanNFCUseCase(repo)
+
+    first = scan_nfc_uc.execute(605, runner.nfc_tag, "2026-02-08T10:00:00.000000", use_event_time=True)
+    second = scan_nfc_uc.execute(605, runner.nfc_tag, "2026-02-08T10:00:00.050000", use_event_time=True)
+
+    assert first.active_runner_count == 1
+    assert second.active_runner_count == 1
+
+    saved = repo.get_by_id(605)
+    assert saved is not None
+    session = saved.runnerSessions[0]
+    assert len(session.intervals) == 1
+    assert session.state == RunnerState.RUNNING
+
+
+@pytest.mark.integration
+def test_invalid_nfc_timestamp_is_ignored_without_mutation():
+    runner = _build_runner(1, "Alice", "NFC001", "RFID001")
+    repo = _seed_workout_with_runners(606, 1, [runner])
+
+    StartWorkoutUseCase(repo).execute(606)
+    scan_nfc_uc = ScanNFCUseCase(repo)
+
+    status = scan_nfc_uc.execute(606, runner.nfc_tag, "not-a-timestamp", use_event_time=True)
+
+    assert status.active_runner_count == 0
+    assert status.resting_runner_count == 0
+
+    saved = repo.get_by_id(606)
+    assert saved is not None
+    session = saved.runnerSessions[0]
+    assert len(session.intervals) == 0
+    assert session.state == RunnerState.NOT_STARTED
+
+
+@pytest.mark.integration
+def test_mixed_nfc_rfid_interleaving_burst_preserves_runner_state_invariants():
+    alice = _build_runner(1, "Alice", "NFC001", "RFID001")
+    bob = _build_runner(2, "Bob", "NFC002", "RFID002")
+    carol = _build_runner(3, "Carol", "NFC003", "RFID003")
+    repo = _seed_workout_with_runners(607, 2, [alice, bob, carol])
+
+    base = datetime(2026, 2, 8, 10, 0, 0)
+
+    def ts(seconds: float) -> str:
+        return (base + timedelta(seconds=seconds)).isoformat()
+
+    start_uc = StartWorkoutUseCase(repo)
+    nfc_uc = ScanNFCUseCase(repo)
+    rfid_uc = ScanRFIDUseCase(repo)
+
+    start_uc.execute(607)
+
+    nfc_uc.execute(607, alice.nfc_tag, ts(0.0), use_event_time=True)
+    duplicate_nfc = nfc_uc.execute(607, alice.nfc_tag, ts(0.05), use_event_time=True)
+    nfc_uc.execute(607, bob.nfc_tag, ts(1.0), use_event_time=True)
+
+    accepted_alice_lap1 = rfid_uc.execute(607, alice.rfid_tag, ts(5.0), use_event_time=True)
+    out_of_order_alice = rfid_uc.execute(607, alice.rfid_tag, ts(4.0), use_event_time=True)
+    accepted_bob_lap1 = rfid_uc.execute(607, bob.rfid_tag, ts(6.0), use_event_time=True)
+    accepted_alice_finish = rfid_uc.execute(607, alice.rfid_tag, ts(7.0), use_event_time=True)
+    nfc_uc.execute(607, alice.nfc_tag, ts(8.0), use_event_time=True)
+    accepted_alice_next_lap1 = rfid_uc.execute(607, alice.rfid_tag, ts(10.0), use_event_time=True)
+
+    assert duplicate_nfc.active_runner_count == 1
+
+    assert accepted_alice_lap1.decision == RFIDDecision.ACCEPTED
+    assert out_of_order_alice.decision == RFIDDecision.IGNORED
+    assert out_of_order_alice.reason == RFIDReason.OUT_OF_ORDER_TIMESTAMP
+    assert accepted_bob_lap1.decision == RFIDDecision.ACCEPTED
+    assert accepted_alice_finish.decision == RFIDDecision.ACCEPTED
+    assert accepted_alice_next_lap1.decision == RFIDDecision.ACCEPTED
+
+    saved = repo.get_by_id(607)
+    assert saved is not None
+    sessions = {rs.runner.name: rs for rs in saved.runnerSessions}
+
+    alice_rs = sessions["Alice"]
+    bob_rs = sessions["Bob"]
+    carol_rs = sessions["Carol"]
+
+    assert len(alice_rs.intervals) == 2
+    assert len(alice_rs.intervals[0]["laps"]) == 2
+    assert len(alice_rs.intervals[1]["laps"]) == 1
+    assert alice_rs.state == RunnerState.RUNNING
+
+    assert len(bob_rs.intervals) == 1
+    assert len(bob_rs.intervals[0]["laps"]) == 1
+    assert bob_rs.state == RunnerState.RUNNING
+
+    assert len(carol_rs.intervals) == 0
+    assert carol_rs.state == RunnerState.NOT_STARTED
+
+
+@pytest.mark.integration
+def test_unknown_rfid_is_ignored_without_mutating_sessions():
+    runner = _build_runner(1, "Alice", "NFC001", "RFID001")
+    repo = _seed_workout_with_runners(608, 2, [runner])
+
+    StartWorkoutUseCase(repo).execute(608)
+    result = ScanRFIDUseCase(repo).execute(608, "UNKNOWN-RFID", "2026-02-08T10:00:00", use_event_time=True)
+
+    assert result.decision == RFIDDecision.IGNORED
+    assert result.reason == RFIDReason.UNKNOWN_TAG
+
+    saved = repo.get_by_id(608)
+    assert saved is not None
+    session = saved.runnerSessions[0]
+    assert session.state == RunnerState.NOT_STARTED
+    assert len(session.intervals) == 0
+    assert len(session.rests) == 0
+
+
+@pytest.mark.integration
+def test_duplicate_rfid_burst_only_records_first_lap_within_debounce_window():
+    runner = _build_runner(1, "Alice", "NFC001", "RFID001")
+    repo = _seed_workout_with_runners(609, 10, [runner])
+
+    StartWorkoutUseCase(repo).execute(609)
+    ScanNFCUseCase(repo).execute(609, runner.nfc_tag, "2026-02-08T10:00:00", use_event_time=True)
+
+    rfid_uc = ScanRFIDUseCase(repo)
+
+    accepted_count = 0
+    ignored_count = 0
+    for i in range(20):
+        event_ts = f"2026-02-08T10:00:00.0{i:02d}"
+        result = rfid_uc.execute(609, runner.rfid_tag, event_ts, use_event_time=True)
+        if result.decision == RFIDDecision.ACCEPTED:
+            accepted_count += 1
+        else:
+            ignored_count += 1
+            assert result.reason == RFIDReason.DUPLICATE_WITHIN_WINDOW
+
+    assert accepted_count == 1
+    assert ignored_count == 19
+
+    saved = repo.get_by_id(609)
+    assert saved is not None
+    session = saved.runnerSessions[0]
+    assert session.state == RunnerState.RUNNING
+    assert len(session.intervals) == 1
+    assert len(session.intervals[0]["laps"]) == 1
+    assert len(session.rests) == 0

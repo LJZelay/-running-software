@@ -45,6 +45,7 @@ class TestScannerEventUtils:
             raw_tag=" 00-aa:bb:cc ",
             raw_timestamp_ms="1700000000123",
             source="reader_hardware",
+            ingest_time_ms=1700000001123,
         )
         assert event.event_type == HardwareEventType.NFC
         assert event.tag_id == "00AABBCC"
@@ -65,4 +66,24 @@ class TestScannerEventUtils:
                 raw_tag="AABB",
                 raw_timestamp_ms=123,
                 source="   ",
+            )
+
+    def test_build_event_envelope_rejects_non_positive_timestamp(self):
+        with pytest.raises(ValueError, match="timestamp_ms must be positive"):
+            build_event_envelope(
+                event_type="rfid",
+                raw_tag="AABB",
+                raw_timestamp_ms=0,
+                source="reader_hardware",
+            )
+
+    def test_build_event_envelope_rejects_excessive_drift(self):
+        with pytest.raises(ValueError, match="timestamp drift exceeds max_drift_ms"):
+            build_event_envelope(
+                event_type="rfid",
+                raw_tag="AABB",
+                raw_timestamp_ms=1700000000000,
+                source="reader_hardware",
+                ingest_time_ms=1700000015001,
+                max_drift_ms=10_000,
             )

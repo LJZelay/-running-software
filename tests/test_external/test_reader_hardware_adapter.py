@@ -100,3 +100,33 @@ def test_create_rfid_rest_adapter_uses_reader_hardware_module(monkeypatch, tmp_p
     adapter.start()
     assert adapter.healthcheck() is True
     adapter.stop()
+
+
+def test_reader_hardware_queue_adapter_burst_preserves_fifo_order():
+    event_q: queue.Queue = queue.Queue()
+    reader = FakeReader()
+    adapter = ReaderHardwareQueueAdapter(
+        reader=reader,
+        event_queue=event_q,
+        config=ReaderHardwareAdapterConfig(event_type="RFID", source="reader_hardware.rest"),
+    )
+
+    expected_count = 25
+    seen_tags = []
+    done = threading.Event()
+
+    def on_event(payload):
+        seen_tags.append(payload.tag_id)
+        if len(seen_tags) >= expected_count:
+            done.set()
+
+    adapter.set_event_callback(on_event)
+    adapter.start()
+
+    for i in range(expected_count):
+        event_q.put((f"TAG{i:02d}", 1704067312000 + i))
+
+    assert done.wait(timeout=2.0)
+    assert seen_tags == [f"TAG{i:02d}" for i in range(expected_count)]
+
+    adapter.stop()

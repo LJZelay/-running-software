@@ -171,3 +171,27 @@ class TestRunnerSessionStateTransitions:
         assert result.decision == "ignored"
         assert result.reason == "invalid_timestamp"
         assert len(session.intervals[-1]["laps"]) == 0
+
+    def test_nfc_invalid_timestamp_logs_ignored_reason(self, caplog):
+        runner = load_athlete_from_csv(0)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        with caplog.at_level("INFO"):
+            accepted = session.process_nfc_start(timestamp="not-a-timestamp", debounce_ms=200)
+
+        assert accepted is False
+        assert session.state == RunnerState.NOT_STARTED
+        assert "event=nfc_start decision=ignored reason=invalid_timestamp" in caplog.text
+
+    def test_nfc_duplicate_logs_ignored_reason(self, caplog):
+        runner = load_athlete_from_csv(0)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        session.process_nfc_start(timestamp="2026-02-08T10:00:00", debounce_ms=200)
+
+        with caplog.at_level("INFO"):
+            accepted = session.process_nfc_start(timestamp="2026-02-08T10:00:00.050000", debounce_ms=200)
+
+        assert accepted is False
+        assert len(session.intervals) == 1
+        assert "event=nfc_start decision=ignored reason=duplicate_within_window" in caplog.text
