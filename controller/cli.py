@@ -11,6 +11,7 @@ import sys
 import os
 import csv
 import time
+import logging
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,9 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_summary_view import RunnerSummaryView
 from application.dto.workout_status_view import WorkoutStatusView
 from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
+from application.rfid_contracts import HardwareEventType, RFIDRuntimeConfig
+from application.services.rfid_worker_service import RFIDWorkerService
+from externalInterface.scanner_event_utils import build_event_envelope
 
 # Repository imports
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
@@ -369,6 +373,8 @@ class IntervalTrainingCLI:
     
     def __init__(self):
         """Initialize CLI with all dependencies."""
+        self.logger = logging.getLogger(__name__)
+
         # Initialize repository
         self.workout_repository = InMemoryWorkoutRepository()
         
@@ -383,6 +389,11 @@ class IntervalTrainingCLI:
         
         # Initialize use cases (with None checks)
         self._init_use_cases()
+
+        # Initialize worker scaffold for hardware event processing
+        self.rfid_runtime_config = RFIDRuntimeConfig()
+        self.rfid_worker_service: Optional[RFIDWorkerService] = None
+        self._init_rfid_worker_service()
         
         # Current workout state
         self.workout_id = self.DEFAULT_WORKOUT_ID
@@ -420,6 +431,49 @@ class IntervalTrainingCLI:
             'config': self.cmd_show_config,
             'runners': self.cmd_list_runners
         }
+
+    def _init_rfid_worker_service(self):
+        """Initialize the RFID worker service for asynchronous RFID processing."""
+        if not self.scan_rfid_uc:
+            self.rfid_worker_service = None
+            return
+
+        self.rfid_worker_service = RFIDWorkerService(
+            config=self.rfid_runtime_config,
+            process_event_callback=self._process_rfid_worker_event,
+        )
+        self.rfid_worker_service.start()
+
+    def _process_rfid_worker_event(self, event):
+        """Worker callback: process one queued RFID event through the use case."""
+        if not self.scan_rfid_uc:
+            raise RuntimeError("ScanRFIDUseCase unavailable")
+
+        event_iso = datetime.fromtimestamp(event.timestamp_ms / 1000.0).isoformat()
+        result = self.scan_rfid_uc.execute(
+            self.workout_id,
+            event.tag_id,
+            event_iso,
+        )
+
+        return {
+            "event_id": event.event_id,
+            "decision": getattr(result, "decision", None),
+            "reason": getattr(result, "reason", None),
+        }
+
+    def _enqueue_rfid_event(self, rfid_tag: str, source: str = "cli") -> bool:
+        """Build and enqueue an RFID hardware envelope for asynchronous processing."""
+        if not self.rfid_worker_service:
+            return False
+
+        envelope = build_event_envelope(
+            event_type=HardwareEventType.RFID.value,
+            raw_tag=rfid_tag,
+            raw_timestamp_ms=int(datetime.now().timestamp() * 1000),
+            source=source,
+        )
+        return self.rfid_worker_service.enqueue_event(envelope)
     
     def _init_use_cases(self):
         """Initialize all use cases with dependencies (if available)."""
@@ -546,6 +600,9 @@ class IntervalTrainingCLI:
                 print(f"  Invalid input: {e}")
             except Exception as e:
                 print(f"  Unexpected error: {type(e).__name__}: {e}")
+        
+        if self.rfid_worker_service:
+            self.rfid_worker_service.stop()
     
     def _show_welcome(self):
         """Display welcome message."""
@@ -861,20 +918,19 @@ class IntervalTrainingCLI:
         timestamp = self._get_timestamp()
         
         try:
-            if self.scan_rfid_uc:
-                status_view = self.scan_rfid_uc.execute(
-                    self.workout_id,
-                    rfid_tag,
-                    timestamp
-                )
-                
+            if self.scan_rfid_uc and self.rfid_worker_service:
+                queued = self._enqueue_rfid_event(rfid_tag, source="cli-sim")
+                if not queued:
+                    print("\n  ✗ RFID event rejected (worker unavailable or queue error)")
+                    return
+
                 # Find runner name
                 runner_session = self._find_runner_by_rfid(rfid_tag)
                 runner_name = runner_session.runner.name if runner_session else rfid_tag
-                
-                print(f"\n  ✓ RFID: {runner_name} detected at {timestamp}")
-                print(f"    Active: {status_view.active_runner_count}")
-                print(f"    Resting: {status_view.resting_runner_count}")
+
+                print(f"\n  ✓ RFID: {runner_name} queued at {timestamp}")
+                if self.rfid_worker_service:
+                    print(f"    Queue depth: {self.rfid_worker_service.get_queue_depth()}")
             else:
                 print(f"\n  ⚠ ScanRFIDUseCase not available")
             
@@ -1068,6 +1124,8 @@ class IntervalTrainingCLI:
     
     def cmd_exit(self, args: List[str]):
         """Exit the application."""
+        if self.rfid_worker_service:
+            self.rfid_worker_service.stop()
         print("\n  " + "=" * 56)
         print("  Thank you for using the Interval Workout Management Tool!")
         print("  " + "=" * 56 + "\n")
@@ -1146,6 +1204,12 @@ class IntervalTrainingCLI:
             print(f"  Active:        {status_view.active_runner_count}")
             print(f"  Resting:       {status_view.resting_runner_count}")
             print(f"  Not Started:   {not_started}")
+            if self.rfid_worker_service:
+                worker_status = self.rfid_worker_service.get_health_status()
+                print(f"  Worker Alive:  {worker_status.is_alive}")
+                print(f"  Queue Depth:   {self.rfid_worker_service.get_queue_depth()}")
+                print(f"  Processed:     {worker_status.events_processed}")
+                print(f"  Dropped:       {worker_status.events_dropped}")
             print("  " + "=" * 56)
             
         except Exception as e:
