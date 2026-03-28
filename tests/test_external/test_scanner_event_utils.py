@@ -1,0 +1,49 @@
+import pytest
+
+from application.rfid_contracts import HardwareEventType
+from externalInterface.scanner_event_utils import build_event_envelope, normalize_tag_id, parse_timestamp_ms
+
+
+@pytest.mark.external
+class TestScannerEventUtils:
+    def test_normalize_tag_id_preserves_leading_zeros(self):
+        assert normalize_tag_id(" 00-ab:cd ") == "00ABCD"
+
+    def test_parse_timestamp_ms_from_numeric_string(self):
+        assert parse_timestamp_ms("1700000000123") == 1700000000123
+
+    def test_build_event_envelope_valid_rfid(self):
+        event = build_event_envelope(
+            event_type="rfid",
+            raw_tag=" aa:bb:cc ",
+            raw_timestamp_ms="1700000000123",
+            source="reader_hardware",
+            reader_id="reader-1",
+            ingest_time_ms=1700000001123,
+        )
+
+        assert event.event_type == HardwareEventType.RFID
+        assert event.tag_id == "AABBCC"
+        assert event.timestamp_ms == 1700000000123
+        assert event.ingest_time_ms == 1700000001123
+        assert event.source == "reader_hardware"
+        assert event.reader_id == "reader-1"
+        assert len(event.event_id) > 0
+
+    def test_build_event_envelope_invalid_event_type(self):
+        with pytest.raises(ValueError):
+            build_event_envelope(
+                event_type="gps",
+                raw_tag="AABB",
+                raw_timestamp_ms=123,
+                source="reader_hardware",
+            )
+
+    def test_build_event_envelope_empty_source(self):
+        with pytest.raises(ValueError):
+            build_event_envelope(
+                event_type="rfid",
+                raw_tag="AABB",
+                raw_timestamp_ms=123,
+                source="   ",
+            )
