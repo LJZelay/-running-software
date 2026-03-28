@@ -60,6 +60,12 @@ class RunnerSession:
     # Domain Behavior
     # ---------------------------
 
+    def mark_ready(self) -> None:
+        """Move a runner from NOT_STARTED to READY after group start activation."""
+        if self.state != RunnerState.NOT_STARTED:
+            raise ValueError("Runner cannot be marked ready from current state")
+        self.state = RunnerState.READY
+
     def start_interval(self, timestamp: Optional[str] = None) -> None:
         # Start interval when NFC is scanned.
 
