@@ -28,6 +28,12 @@ from application.exceptions import WorkoutNotFoundError, InvalidApplicationReque
 from application.rfid_contracts import HardwareEventType, RFIDRuntimeConfig
 from application.services.rfid_worker_service import RFIDWorkerService
 from externalInterface.scanner_event_utils import build_event_envelope
+from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
+
+try:
+    from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter
+except ImportError:
+    create_rfid_rest_adapter = None
 
 # Repository imports
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
@@ -326,7 +332,8 @@ class EventCSVProcessor:
                         status_view = self.cli.scan_rfid_uc.execute(
                             self.cli.workout_id,
                             tag,
-                            dt.isoformat()
+                            dt.isoformat(),
+                            use_event_time=True,
                         )
                         
                         # Find runner name for better display
@@ -394,6 +401,8 @@ class IntervalTrainingCLI:
         self.rfid_runtime_config = RFIDRuntimeConfig()
         self.rfid_worker_service: Optional[RFIDWorkerService] = None
         self._init_rfid_worker_service()
+        self.hardware_rfid_adapter: Optional[ScannerAdapter] = None
+        self._init_optional_hardware_rfid_adapter()
         
         # Current workout state
         self.workout_id = self.DEFAULT_WORKOUT_ID
@@ -441,8 +450,50 @@ class IntervalTrainingCLI:
         self.rfid_worker_service = RFIDWorkerService(
             config=self.rfid_runtime_config,
             process_event_callback=self._process_rfid_worker_event,
+            overflow_event_callback=self._handle_queue_overflow,
         )
         self.rfid_worker_service.start()
+
+    def _init_optional_hardware_rfid_adapter(self):
+        """Optionally wire a real reader_hardware RFID adapter when configured."""
+        if not self.rfid_worker_service or create_rfid_rest_adapter is None:
+            return
+
+        scanner_url = os.getenv("FEATURE2_RFID_REST_URL")
+        if not scanner_url:
+            return
+
+        try:
+            adapter = create_rfid_rest_adapter(scanner_url)
+            adapter.set_event_callback(self._on_hardware_scanner_payload)
+            adapter.start()
+            self.hardware_rfid_adapter = adapter
+            self.logger.info("reader_hardware RFID adapter started: %s", scanner_url)
+        except Exception as exc:
+            self.logger.error("Failed to initialize reader_hardware RFID adapter: %s", exc)
+
+    def _on_hardware_scanner_payload(self, payload: ScannerPayload) -> None:
+        """Receive normalized scanner payloads and enqueue them for worker processing."""
+        if not self.rfid_worker_service:
+            return
+
+        envelope = build_event_envelope(
+            event_type=payload.event_type,
+            raw_tag=payload.tag_id,
+            raw_timestamp_ms=payload.timestamp_ms,
+            source=payload.source,
+            reader_id=payload.reader_id,
+        )
+        self.rfid_worker_service.enqueue_event(envelope)
+
+    def _handle_queue_overflow(self, dropped_event):
+        """Emit queue overflow signal when oldest event is dropped."""
+        self.logger.warning(
+            "queue_overflow_dropped_event event_id=%s tag_id=%s source=%s",
+            dropped_event.event_id,
+            dropped_event.tag_id,
+            dropped_event.source,
+        )
 
     def _process_rfid_worker_event(self, event):
         """Worker callback: process one queued RFID event through the use case."""
@@ -454,6 +505,7 @@ class IntervalTrainingCLI:
             self.workout_id,
             event.tag_id,
             event_iso,
+            use_event_time=True,
         )
 
         return {
@@ -1124,6 +1176,8 @@ class IntervalTrainingCLI:
     
     def cmd_exit(self, args: List[str]):
         """Exit the application."""
+        if self.hardware_rfid_adapter:
+            self.hardware_rfid_adapter.stop()
         if self.rfid_worker_service:
             self.rfid_worker_service.stop()
         print("\n  " + "=" * 56)
@@ -1210,6 +1264,9 @@ class IntervalTrainingCLI:
                 print(f"  Queue Depth:   {self.rfid_worker_service.get_queue_depth()}")
                 print(f"  Processed:     {worker_status.events_processed}")
                 print(f"  Dropped:       {worker_status.events_dropped}")
+                print(f"  Queue Util %:  {worker_status.queue_utilization_percent:.1f}")
+                print(f"  Drops/Minute:  {worker_status.queue_drops_per_minute:.2f}")
+                print(f"  Avg Latency:   {worker_status.processing_latency_ms:.2f} ms")
             print("  " + "=" * 56)
             
         except Exception as e:

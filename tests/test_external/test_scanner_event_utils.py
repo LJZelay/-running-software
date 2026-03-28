@@ -1,13 +1,22 @@
 import pytest
 
 from application.rfid_contracts import HardwareEventType
-from externalInterface.scanner_event_utils import build_event_envelope, normalize_tag_id, parse_timestamp_ms
+from externalInterface.scanner_event_utils import (
+    build_event_envelope,
+    normalize_nfc_tag_id,
+    normalize_rfid_tag_id,
+    parse_timestamp_ms,
+)
 
 
 @pytest.mark.external
 class TestScannerEventUtils:
-    def test_normalize_tag_id_preserves_leading_zeros(self):
-        assert normalize_tag_id(" 00-ab:cd ") == "00ABCD"
+    def test_normalize_nfc_tag_id_preserves_leading_zeros(self):
+        assert normalize_nfc_tag_id(" 00-ab:cd ") == "00ABCD"
+
+    def test_normalize_rfid_tag_id_strips_leading_zeros(self):
+        assert normalize_rfid_tag_id(" 00-ab:cd ") == "ABCD"
+        assert normalize_rfid_tag_id("0000") == "0"
 
     def test_parse_timestamp_ms_from_numeric_string(self):
         assert parse_timestamp_ms("1700000000123") == 1700000000123
@@ -15,7 +24,7 @@ class TestScannerEventUtils:
     def test_build_event_envelope_valid_rfid(self):
         event = build_event_envelope(
             event_type="rfid",
-            raw_tag=" aa:bb:cc ",
+            raw_tag=" 00-aa:bb:cc ",
             raw_timestamp_ms="1700000000123",
             source="reader_hardware",
             reader_id="reader-1",
@@ -29,6 +38,16 @@ class TestScannerEventUtils:
         assert event.source == "reader_hardware"
         assert event.reader_id == "reader-1"
         assert len(event.event_id) > 0
+
+    def test_build_event_envelope_valid_nfc_preserves_zeros(self):
+        event = build_event_envelope(
+            event_type="nfc",
+            raw_tag=" 00-aa:bb:cc ",
+            raw_timestamp_ms="1700000000123",
+            source="reader_hardware",
+        )
+        assert event.event_type == HardwareEventType.NFC
+        assert event.tag_id == "00AABBCC"
 
     def test_build_event_envelope_invalid_event_type(self):
         with pytest.raises(ValueError):

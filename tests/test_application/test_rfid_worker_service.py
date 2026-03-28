@@ -124,7 +124,12 @@ def test_enqueue_event_queue_overflow_drops_oldest(runtime_config):
         time.sleep(0.05)
         return {"decision": "accepted"}
     
-    service = RFIDWorkerService(runtime_config, callback)
+    dropped_ids = []
+
+    def overflow_callback(event):
+        dropped_ids.append(event.event_id)
+
+    service = RFIDWorkerService(runtime_config, callback, overflow_event_callback=overflow_callback)
     service.start()
     
     # Rapidly queue more events than queue size
@@ -149,6 +154,7 @@ def test_enqueue_event_queue_overflow_drops_oldest(runtime_config):
     
     # Verify: some events were dropped (queue size is 10)
     assert service._events_dropped > 0, "Expected queue overflow to drop events"
+    assert len(dropped_ids) > 0, "Expected overflow callback to be called"
 
 
 def test_worker_health_status(runtime_config, test_event):
@@ -163,6 +169,9 @@ def test_worker_health_status(runtime_config, test_event):
     assert status.is_alive is True
     assert status.events_processed == 0
     assert status.events_dropped == 0
+    assert status.queue_utilization_percent >= 0.0
+    assert status.queue_drops_per_minute >= 0.0
+    assert status.processing_latency_ms >= 0.0
     
     # Queue and process event
     service.enqueue_event(test_event)
@@ -171,6 +180,7 @@ def test_worker_health_status(runtime_config, test_event):
     status = service.get_health_status()
     assert status.is_alive is True
     assert status.events_processed >= 1
+    assert status.last_processed_event_id is not None
     
     service.stop()
 

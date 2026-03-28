@@ -29,6 +29,11 @@ class WorkerHealthStatus:
     is_alive: bool
     events_processed: int
     events_dropped: int
+    queue_utilization_percent: float
+    queue_drops_per_minute: float
+    processing_latency_ms: float
+    last_processed_event_id: Optional[str] = None
+    last_processing_latency_ms: Optional[int] = None
     last_error: Optional[str] = None
     last_error_time: Optional[str] = None
     worker_thread_id: Optional[int] = None
@@ -50,7 +55,12 @@ class RFIDWorkerService:
     - Coach/display reads lock briefly for status queries
     """
     
-    def __init__(self, config: RFIDRuntimeConfig, process_event_callback: Callable):
+    def __init__(
+        self,
+        config: RFIDRuntimeConfig,
+        process_event_callback: Callable,
+        overflow_event_callback: Optional[Callable[[RFIDEventEnvelope], None]] = None,
+    ):
         """
         Initialize RFID worker service.
         
@@ -62,12 +72,18 @@ class RFIDWorkerService:
         """
         self.config = config
         self.process_event_callback = process_event_callback
+        self.overflow_event_callback = overflow_event_callback
         
         # Shared state protected by single coarse-grained lock
         self._lock = threading.Lock()
         self._worker_alive = True
         self._events_processed = 0
         self._events_dropped = 0
+        self._latency_sum_ms = 0
+        self._latency_samples = 0
+        self._last_processed_event_id: Optional[str] = None
+        self._last_processing_latency_ms: Optional[int] = None
+        self._metrics_started_at_ms: Optional[int] = None
         self._last_error: Optional[str] = None
         self._last_error_time: Optional[str] = None
         
@@ -100,6 +116,7 @@ class RFIDWorkerService:
             self._started = True
             self._stop_event.clear()
             self._worker_alive = True
+            self._metrics_started_at_ms = int(datetime.now().timestamp() * 1000)
             
         # Start worker thread (processes events from queue)
         self._worker_thread = threading.Thread(
@@ -159,10 +176,17 @@ class RFIDWorkerService:
             except queue.Full:
                 # Queue is full, drop oldest and add new
                 try:
-                    self._event_queue.get_nowait()  # Drop oldest
+                    dropped_event: RFIDEventEnvelope = self._event_queue.get_nowait()  # Drop oldest
                     self._event_queue.put_nowait(event)
                     with self._lock:
                         self._events_dropped += 1
+
+                    if self.overflow_event_callback:
+                        try:
+                            self.overflow_event_callback(dropped_event)
+                        except Exception as callback_error:
+                            logger.error(f"Overflow callback failed: {callback_error}")
+
                     logger.debug(f"Queue full, dropped oldest event (dropped: {self._events_dropped})")
                     return True
                 except queue.Empty:
@@ -181,10 +205,28 @@ class RFIDWorkerService:
             WorkerHealthStatus with worker state, stats, errors
         """
         with self._lock:
+            queue_depth = self._event_queue.qsize()
+            queue_capacity = self.config.queue_size if self.config.queue_size > 0 else 1
+            queue_utilization_percent = (queue_depth / queue_capacity) * 100.0
+
+            now_ms = int(datetime.now().timestamp() * 1000)
+            start_ms = self._metrics_started_at_ms or now_ms
+            elapsed_ms = max(1, now_ms - start_ms)
+            queue_drops_per_minute = self._events_dropped * (60_000.0 / elapsed_ms)
+
+            processing_latency_ms = 0.0
+            if self._latency_samples > 0:
+                processing_latency_ms = self._latency_sum_ms / self._latency_samples
+
             return WorkerHealthStatus(
                 is_alive=self._worker_alive,
                 events_processed=self._events_processed,
                 events_dropped=self._events_dropped,
+                queue_utilization_percent=queue_utilization_percent,
+                queue_drops_per_minute=queue_drops_per_minute,
+                processing_latency_ms=processing_latency_ms,
+                last_processed_event_id=self._last_processed_event_id,
+                last_processing_latency_ms=self._last_processing_latency_ms,
                 last_error=self._last_error,
                 last_error_time=self._last_error_time,
                 worker_thread_id=self._worker_thread.ident if self._worker_thread else None
@@ -222,6 +264,13 @@ class RFIDWorkerService:
                             # Callback is responsible for updating workout/runner sessions
                             decision_result = self.process_event_callback(event)
                             self._events_processed += 1
+                            self._last_processed_event_id = event.event_id
+
+                            finish_time_ms = int(datetime.now().timestamp() * 1000)
+                            latency_ms = max(0, finish_time_ms - event.ingest_time_ms)
+                            self._latency_sum_ms += latency_ms
+                            self._latency_samples += 1
+                            self._last_processing_latency_ms = latency_ms
                             
                             logger.debug(
                                 f"Event {event.event_id} processed: decision={decision_result}"

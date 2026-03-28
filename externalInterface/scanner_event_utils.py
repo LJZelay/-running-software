@@ -5,8 +5,7 @@ from uuid import uuid4
 from application.rfid_contracts import HardwareEventType, RFIDEventEnvelope
 
 
-def normalize_tag_id(raw_tag: str) -> str:
-    """Normalize hardware tag IDs at adapter boundary without altering semantic value."""
+def _normalize_common(raw_tag: str) -> str:
     if raw_tag is None:
         raise ValueError("tag_id must not be None")
 
@@ -15,6 +14,30 @@ def normalize_tag_id(raw_tag: str) -> str:
         raise ValueError("tag_id must not be empty")
 
     return normalized
+
+
+def normalize_rfid_tag_id(raw_tag: str) -> str:
+    """Match reader_hardware canonical RFID behavior: strip leading zeros."""
+    normalized = _normalize_common(raw_tag)
+    return normalized.lstrip("0") or "0"
+
+
+def normalize_nfc_tag_id(raw_tag: str) -> str:
+    """Normalize NFC tags locally (uppercase + separator-free + trim)."""
+    return _normalize_common(raw_tag)
+
+
+def normalize_tag_id(raw_tag: str, event_type: Optional[str] = None) -> str:
+    """Backwards-compatible dispatcher for normalization by event type."""
+    if event_type is None:
+        return normalize_nfc_tag_id(raw_tag)
+
+    normalized_event_type = event_type.strip().upper()
+    if normalized_event_type == HardwareEventType.RFID.value:
+        return normalize_rfid_tag_id(raw_tag)
+    if normalized_event_type == HardwareEventType.NFC.value:
+        return normalize_nfc_tag_id(raw_tag)
+    raise ValueError("event_type must be RFID or NFC")
 
 
 def parse_timestamp_ms(raw_timestamp: object) -> int:
@@ -61,7 +84,7 @@ def build_event_envelope(
     return RFIDEventEnvelope(
         event_id=str(uuid4()),
         event_type=HardwareEventType(normalized_event_type),
-        tag_id=normalize_tag_id(raw_tag),
+        tag_id=normalize_tag_id(raw_tag, normalized_event_type),
         timestamp_ms=event_timestamp_ms,
         ingest_time_ms=resolved_ingest_time_ms,
         source=source.strip(),
