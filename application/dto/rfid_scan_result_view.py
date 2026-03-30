@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from application.dto.workout_status_view import WorkoutStatusView
 from application.rfid_contracts import RFIDDecision, RFIDReason
@@ -10,8 +11,8 @@ class RFIDScanResultView:
     decision: RFIDDecision
     reason: RFIDReason
     workout_status: WorkoutStatusView
-    runner_id: int | None = None
-    runner_name: str | None = None
+    runner_id: Optional[int] = None
+    runner_name: Optional[str] = None
 
     # Backward-compatible convenience properties for existing callers.
     @property
