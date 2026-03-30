@@ -1,0 +1,64 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 1165 >>
+stream
+BT
+/F1 12 Tf
+50 780 Td
+14 TL
+(Runner Workout Report) Tj
+T* (Runner: Alice) Tj
+T* (Workout ID: 1) Tj
+T* (Workout Date: 2026-03-30T13:59:28.875321) Tj
+T* (Configured Interval Distance: 400 m) Tj
+T* (Configured Rest Duration: 60 s) Tj
+T* () Tj
+T* (Intervals) Tj
+T* (Interval 1: start=2023-12-31T18:00:05, end=2023-12-31T18:01:52, duration=107000 ms) Tj
+T* (Split timings \(ms\):) Tj
+T* (  Lap 1: split=107000, cumulative=107000) Tj
+T* (Rest 1: configured=60 s, actual=200000 ms) Tj
+T* () Tj
+T* (Interval 2: start=2023-12-31T18:05:12, end=2023-12-31T18:06:52, duration=100000 ms) Tj
+T* (Split timings \(ms\):) Tj
+T* (  Lap 1: split=100000, cumulative=100000) Tj
+T* (Rest 2: configured=60 s, actual=300000 ms) Tj
+T* () Tj
+T* (Interval 3: start=2023-12-31T18:11:52, end=2023-12-31T18:13:30, duration=98000 ms) Tj
+T* (Split timings \(ms\):) Tj
+T* (  Lap 1: split=98000, cumulative=98000) Tj
+T* (Rest 3: configured=60 s, actual=302000 ms) Tj
+T* () Tj
+T* (Interval 4: start=2023-12-31T18:18:32, end=2023-12-31T18:20:08, duration=96000 ms) Tj
+T* (Split timings \(ms\):) Tj
+T* (  Lap 1: split=96000, cumulative=96000) Tj
+T* (Rest 4: configured=60 s, actual=N/A) Tj
+T* () Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1528
+%%EOF

@@ -24,6 +24,22 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_summary_view import RunnerSummaryView
 from application.dto.workout_status_view import WorkoutStatusView
 from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
+from application.rfid_contracts import HardwareEventType, RFIDRuntimeConfig
+from application.services.rfid_worker_service import RFIDWorkerService
+from application.use_cases.generate_runner_report import GenerateRunnerReportUseCase
+from externalInterface.runner_pdf_report_service import RunnerPdfReportService
+from externalInterface.scanner_event_utils import build_event_envelope
+from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
+
+try:
+    from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter
+except ImportError:
+    create_rfid_rest_adapter = None
+
+try:
+    from externalInterface.reader_hardware_adapter import create_nfc_adapter
+except ImportError:
+    create_nfc_adapter = None
 
 # Repository imports
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
@@ -300,7 +316,8 @@ class EventCSVProcessor:
                         status_view = self.cli.scan_nfc_uc.execute(
                             self.cli.workout_id,
                             tag,
-                            dt.isoformat()
+                            dt.isoformat(),
+                            use_event_time=True,
                         )
                         
                         # Find runner name for better display
@@ -430,9 +447,16 @@ class IntervalTrainingCLI:
             self.start_workout_uc = None
             
         if EndWorkoutUseCase:
-            self.end_workout_uc = EndWorkoutUseCase(self.workout_repository)
+            report_service = RunnerPdfReportService(output_dir=Path("reports"))
+            generate_report_uc = GenerateRunnerReportUseCase(report_service)
+            self.generate_report_uc = generate_report_uc
+            self.end_workout_uc = EndWorkoutUseCase(
+                self.workout_repository,
+                generate_report_use_case=generate_report_uc
+            )
         else:
             self.end_workout_uc = None
+            self.generate_report_uc = None
         
         # Event handling use cases
         if ScanNFCUseCase:
@@ -1039,14 +1063,21 @@ class IntervalTrainingCLI:
     
     def cmd_generate_report(self, args: List[str]):
         """Generate PDF report."""
+        workout = self.workout_repository.get_by_id(self.workout_id)
+        if not workout:
+            print("\n  Error: Workout not found")
+            return
+
+        output_dir = args[0] if args else "reports"
+        report_service = RunnerPdfReportService(output_dir=Path(output_dir))
+        generate_report_uc = GenerateRunnerReportUseCase(report_service)
+        generated_files = generate_report_uc.execute(workout)
+
         print("\n  📄 PDF Report Generation")
         print("  " + "-" * 56)
-        print("  This would generate a PDF report with:")
-        print("  • Runner names and dates")
-        print("  • Interval distances and rest durations")
-        print("  • Split times for each interval")
-        print("  • Average paces")
-        print("\n  [To be implemented with GenerateReportUseCase]")
+        print(f"  Generated {len(generated_files)} runner report(s):")
+        for report_path in generated_files:
+            print(f"  • {report_path}")
     
     # ========== COMMAND 13: Email report ==========
     
