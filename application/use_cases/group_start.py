@@ -6,7 +6,7 @@ from typing import Tuple
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int
-from domain.runner_state import RunnerState
+from domain.runnerState import RunnerState
 
 
 class GroupStartUseCase:
