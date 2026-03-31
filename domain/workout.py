@@ -199,3 +199,22 @@ class Workout:
             startTime=data.get("startTime"),
             endTime=data.get("endTime"),
         )
+    
+    def get_running_runner_sessions(self) -> List[RunnerSession]:
+        """
+        Returns all runner sessions currently running.
+        Domain decides eligibility.
+        """
+        if self.status != WorkoutState.ACTIVE:
+            return []
+
+        running = []
+        for rs in self.runnerSessions:
+            if rs.state == RunnerState.RUNNING:
+                running.append(rs)
+        return running
+    
+    def get_running_runner_sessions(self):
+        """Return a list of RunnerSession objects that are currently running."""
+        from domain.runnerState import RunnerState
+        return [rs for rs in self.runnerSessions if rs.state == RunnerState.RUNNING]
