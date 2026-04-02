@@ -1,0 +1,7 @@
+name,email,nfc_tag,rfid_tag
+Alice,alice@example.com,NFC001,RFID001
+Bob,bob@example.com,NFC002,RFID002
+Charlie,charlie@example.com,NFC003,RFID003
+Diana,diana@example.com,NFC004,RFID004
+Eve,eve@example.com,NFC005,RFID005
+Jessica,jessica@example.com,NFC006,RFID006

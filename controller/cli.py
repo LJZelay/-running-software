@@ -16,6 +16,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from domain import workout
+
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,6 +41,7 @@ try:
     from externalInterface.reader_hardware_adapter import create_nfc_adapter
 except ImportError:
     create_nfc_adapter = None
+from application.last_roster_service import LastRosterService
 
 # Repository imports
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
@@ -397,6 +400,9 @@ class IntervalTrainingCLI:
         
         # Initialize CSV parser
         self.csv_parser = CSVRosterParser(strict_validation=True)
+
+        #initialize last roster service
+        self.last_roster_service = LastRosterService()
         
         # Initialize event processor
         self.event_processor = EventCSVProcessor(self)
@@ -446,6 +452,7 @@ class IntervalTrainingCLI:
             '12': self.cmd_generate_report,
             '13': self.cmd_email_report,
             '14': self.cmd_exit,
+            '15': self.cmd_load_last_roster,
             'help': self.cmd_help,
             'status': self.cmd_status,
             'group': self.cmd_show_group,
@@ -751,6 +758,7 @@ class IntervalTrainingCLI:
         print("   12              - Generate PDF report")
         print("   13              - Email report to participants")
         print("   14              - Exit application")
+        print("   15              - Load last roster from previous session")
         print("\n   UTILITY:")
         print("   status         - Show workout status")
         print("   group          - Show current group members")
@@ -862,6 +870,12 @@ class IntervalTrainingCLI:
             
             # Save workout
             self.workout_repository.save(workout)
+
+            #save latest roster for next session
+            print("  DEBUG: last roster save was called")
+            saved_runners = [rs.runner for rs in workout.runnerSessions]
+            self.last_roster_service.save_roster(saved_runners)
+            print("DEBUG: save_roster call completed")
             
             print(f"\n  ✓ Loaded {added_count} athletes from {file_path}")
             print("\n  Imported athletes:")
@@ -870,6 +884,54 @@ class IntervalTrainingCLI:
             
         except Exception as e:
             print(f"  Error loading roster: {e}")
+
+    # ========== COMMAND 15: Load last roster from previous session ==========
+    def cmd_load_last_roster(self, args: List[str]):
+        """Load the last saved roster file."""
+        try:
+            if not self.last_roster_service.has_saved_roster():
+                print("\n  No saved roster found.")
+                return
+
+            runners = self.last_roster_service.load_roster()
+
+            workout = self.workout_repository.get_by_id(self.workout_id)
+            if not workout:
+                print("  Error: Workout not found")
+                return
+
+            # Optional safety: prevent duplicate loading
+            if workout.runnerSessions:
+                print("\n  Error: Runners are already loaded into the current workout.")
+                print("  Start a fresh workout before loading the saved roster.")
+                return
+
+            added_count = 0
+
+            for runner in runners:
+                from domain.runnerSession import RunnerSession
+
+                session = RunnerSession(
+                    runner=runner,
+                    restDuration=self.workout_config['rest_duration']
+                )
+
+                if workout.add_runner_session(session):
+                    added_count += 1
+
+            self.workout_repository.save(workout)
+
+            # Save this as the last known roster
+            #saved_runners = [rs.runner for rs in workout.runnerSessions]
+            #self.last_roster_service.save_roster(saved_runners)
+
+            print(f"\n  ✓ Loaded {added_count} runners from last saved roster")
+
+            for i, rs in enumerate(workout.runnerSessions[-added_count:], 1):
+                print(f"    {i}. {rs.runner.name} (NFC: {rs.runner.nfc_tag}, RFID: {rs.runner.rfid_tag})")
+
+        except Exception as e:
+            print(f"  Error loading last saved roster: {e}")
     
     # ========== COMMAND 3: Load events.csv ==========
     
