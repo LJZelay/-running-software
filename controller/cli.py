@@ -682,13 +682,13 @@ class IntervalTrainingCLI:
         
         while True:
             try:
-                command = input("\n❯ ").strip().lower()
+                raw_input = input("\n❯ ").strip()
                 
-                if not command:
+                if not raw_input:
                     continue
                 
-                parts = command.split()
-                cmd = parts[0]
+                parts = raw_input.split()
+                cmd = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
                 
                 if cmd in ['14', 'exit', 'quit', 'q']:
