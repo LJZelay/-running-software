@@ -1,3 +1,5 @@
+"""Scanner event normalization and envelope-building helpers for RFID/NFC hardware payloads."""
+
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4

@@ -1,12 +1,14 @@
+"""Queue-to-callback bridge adapters that convert hardware reader tuples into ScannerPayload events."""
+
 from __future__ import annotations
 
 import queue
 import threading
 from dataclasses import dataclass
-from pathlib import Path
-import sys
 from typing import Callable, Optional
 
+from externalInterface.acr122u_nfc import NFCReader
+from externalInterface.rfid_impinj_rest import ReaderRfidImpinjRest
 from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
 
 
@@ -55,6 +57,7 @@ class ReaderHardwareQueueAdapter(ScannerAdapter):
         return self._running and reader_running and pump_running
 
     def _pump_events(self) -> None:
+        # Pump raw reader tuples into the app-facing payload callback.
         while not self._stop_event.is_set():
             try:
                 tag_id, timestamp_ms = self._event_queue.get(timeout=0.2)
@@ -73,28 +76,8 @@ class ReaderHardwareQueueAdapter(ScannerAdapter):
             self._callback(payload)
 
 
-def _append_reader_hardware_sys_path(repo_root: Optional[str] = None) -> None:
-    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[2] / "reader_hardware"
-    if not root.exists():
-        raise RuntimeError(f"reader_hardware not found at: {root}")
-
-    root_str = str(root)
-    if root_str not in sys.path:
-        sys.path.append(root_str)
-
-    # Ensure package-local relative imports inside reader_hardware keep working.
-    for subdir in ("rfid_impinj_rest_reader", "nfc_reader", "utils"):
-        candidate = root / subdir
-        candidate_str = str(candidate)
-        if candidate.exists() and candidate_str not in sys.path:
-            sys.path.append(candidate_str)
-
-
-def create_rfid_rest_adapter(scanner_address: str, repo_root: Optional[str] = None) -> ReaderHardwareQueueAdapter:
-    """Create adapter around reader_hardware REST RFID reader."""
-    _append_reader_hardware_sys_path(repo_root)
-
-    from rfid_impinj_rest import ReaderRfidImpinjRest  # type: ignore
+def create_rfid_rest_adapter(scanner_address: str) -> ReaderHardwareQueueAdapter:
+    """Create a bridge adapter backed by the local Impinj REST RFID reader."""
 
     event_q: queue.Queue = queue.Queue()
     reader = ReaderRfidImpinjRest(scanner_address, event_q)
@@ -105,11 +88,8 @@ def create_rfid_rest_adapter(scanner_address: str, repo_root: Optional[str] = No
     )
 
 
-def create_nfc_adapter(repo_root: Optional[str] = None) -> ReaderHardwareQueueAdapter:
-    """Create adapter around reader_hardware NFC reader."""
-    _append_reader_hardware_sys_path(repo_root)
-
-    from acr122u_nfc import NFCReader  # type: ignore
+def create_nfc_adapter() -> ReaderHardwareQueueAdapter:
+    """Create a bridge adapter backed by the local ACR122U NFC reader."""
 
     event_q: queue.Queue = queue.Queue()
     reader = NFCReader(event_q)

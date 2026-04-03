@@ -1,3 +1,5 @@
+"""Shared scanner transport contract and payload shape used by hardware adapters and CLI wiring."""
+
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 

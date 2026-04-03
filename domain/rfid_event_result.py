@@ -1,3 +1,9 @@
+"""Domain-level result contract for RFID event decisions.
+
+Used by domain workflow methods to return normalized decision/reason outcomes
+without coupling callers to runner session internals.
+"""
+
 from dataclasses import dataclass
 from typing import Optional
 

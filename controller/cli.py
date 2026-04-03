@@ -12,6 +12,7 @@ import os
 import csv
 import time
 import logging
+import threading
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,7 +28,7 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_summary_view import RunnerSummaryView
 from application.dto.workout_status_view import WorkoutStatusView
 from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
-from application.rfid_contracts import HardwareEventType, RFIDRuntimeConfig
+from application.rfid_contracts import HardwareEventType, RFIDDecision, RFIDReason, RFIDRuntimeConfig
 from application.services.rfid_worker_service import RFIDWorkerService
 from externalInterface.scanner_event_utils import build_event_envelope
 from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
@@ -299,6 +300,7 @@ class EventCSVProcessor:
                             print(f"    - Event {event_num}: {runner_session.runner.name} already in group")
                     else:
                         print(f"    ⚠ Event {event_num}: Unknown NFC tag {tag} for GROUP event")
+                        return False, f"Unknown NFC tag {tag} for GROUP event"
             
             elif event_type == 'START':
                 # Trigger group start
@@ -313,8 +315,10 @@ class EventCSVProcessor:
                         self.cli.group_nfc_tags.clear()
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: Group start failed: {e}")
+                        return False, f"Group start failed: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: START event but no athletes in group or group start unavailable")
+                    return False, "START event but no athletes in group or group start unavailable"
             
             elif event_type == 'NFC':
                 # NFC scan to start interval
@@ -335,8 +339,10 @@ class EventCSVProcessor:
                         
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: NFC scan failed for {tag}: {e}")
+                        return False, f"NFC scan failed for {tag}: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: NFC scan use case not available")
+                    return False, "NFC scan use case not available"
             
             elif event_type == 'RFID':
                 # RFID detection (lap/interval completion)
@@ -367,11 +373,14 @@ class EventCSVProcessor:
                         
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: RFID detection failed for {tag}: {e}")
+                        return False, f"RFID detection failed for {tag}: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: RFID scan use case not available")
+                    return False, "RFID scan use case not available"
             
             else:
                 print(f"    ⚠ Event {event_num}: Unknown event type: {event_type}")
+                return False, f"Unknown event type: {event_type}"
             
             return True, ""
             
@@ -419,6 +428,9 @@ class IntervalTrainingCLI:
         self._init_rfid_worker_service()
         self.hardware_rfid_adapter: Optional[ScannerAdapter] = None
         self.hardware_nfc_adapter: Optional[ScannerAdapter] = None
+        self._rfid_signal_lock = threading.Lock()
+        self._rfid_signal_announced = False
+        self._rfid_reader_url: Optional[str] = None
         self._init_optional_hardware_rfid_adapter()
         self._init_optional_hardware_nfc_adapter()
         
@@ -487,6 +499,7 @@ class IntervalTrainingCLI:
             adapter.set_event_callback(self._on_hardware_scanner_payload)
             adapter.start()
             self.hardware_rfid_adapter = adapter
+            self._rfid_reader_url = scanner_url
             self.logger.info("reader_hardware RFID adapter started: %s", scanner_url)
         except Exception as exc:
             self.logger.error("Failed to initialize reader_hardware RFID adapter: %s", exc)
@@ -519,6 +532,13 @@ class IntervalTrainingCLI:
         if not self.rfid_worker_service:
             return
 
+        if payload.event_type == HardwareEventType.RFID.value:
+            with self._rfid_signal_lock:
+                if not self._rfid_signal_announced:
+                    endpoint = self._rfid_reader_url or os.getenv("FEATURE2_RFID_REST_URL", "unknown endpoint")
+                    print(f"\n  RFID link active: receiving scans from {endpoint} (sim_server communication OK)")
+                    self._rfid_signal_announced = True
+
         envelope = build_event_envelope(
             event_type=payload.event_type,
             raw_tag=payload.tag_id,
@@ -546,12 +566,24 @@ class IntervalTrainingCLI:
             if not self.scan_rfid_uc:
                 raise RuntimeError("ScanRFIDUseCase unavailable")
 
-            result = self.scan_rfid_uc.execute(
-                self.workout_id,
-                event.tag_id,
-                event_iso,
-                use_event_time=True,
-            )
+            try:
+                result = self.scan_rfid_uc.execute(
+                    self.workout_id,
+                    event.tag_id,
+                    event_iso,
+                    use_event_time=True,
+                )
+            except ValueError as exc:
+                # Hardware can emit scans before the workout is active; treat as ignored.
+                if "Workout is not active" in str(exc):
+                    return {
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "decision": RFIDDecision.IGNORED.value,
+                        "reason": "workout_not_active",
+                    }
+                raise
+
             return {
                 "event_id": event.event_id,
                 "event_type": event.event_type.value,

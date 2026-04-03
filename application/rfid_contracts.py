@@ -1,3 +1,9 @@
+"""Application-layer hardware event contracts.
+
+Used by CLI, worker service, scanner event utilities, and RFID scan DTOs to keep
+event types, envelope shape, and runtime configuration consistent end-to-end.
+"""
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
