@@ -17,7 +17,7 @@ class RunnerView(tk.Toplevel):
         parent,
         get_rest_uc,
         get_runner_analytics_uc,
-        runner_id: int,
+        runner,
         workout_id: int,
         scan_nfc_uc=None,
         scan_rfid_uc=None,
@@ -29,7 +29,8 @@ class RunnerView(tk.Toplevel):
         self.get_runner_analytics_uc = get_runner_analytics_uc
         self.scan_nfc_uc = scan_nfc_uc
         self.scan_rfid_uc = scan_rfid_uc
-        self.runner_id = runner_id
+        self.runner = runner
+        self.runner_id = runner.id
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.lap_count = 0
@@ -41,35 +42,59 @@ class RunnerView(tk.Toplevel):
         self._start_polling()
 
     def _setup_ui(self):
-        ttk.Label(self, text="Runner Dashboard", style="Title.TLabel").pack(side=tk.TOP, padx=16, pady=(12, 6))
+        """Create UI following Apple's design principles."""
+        self.title(f"Runner - {self.runner.name}")
+        self.geometry("700x600")
+        ModernTheme.configure(self)
 
-        btn_frame = ttk.Frame(self, style="Toolbar.TFrame", padding=(16, 6))
-        btn_frame.pack(fill=tk.X)
+        # Header with runner name
+        header_frame = ttk.Frame(self, style="GlassHighlight.TFrame")
+        header_frame.pack(fill=tk.X, side=tk.TOP)
 
-        ttk.Button(btn_frame, text="🏃 Simulate Lap", command=self._simulate_lap, style="Success.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="📞 Request Coach", command=self._request_coach).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="🔄 Refresh", command=self._refresh).pack(side=tk.LEFT, padx=4)
+        ttk.Label(header_frame, text=f"🏃 {self.runner.name}", style="Title.TLabel").pack(side=tk.LEFT, padx=(16, 0), pady=(12, 6))
 
-        self.main = ttk.Frame(self, padding=16)
-        self.main.pack(fill=tk.BOTH, expand=True)
+        # Action buttons with proper hierarchy
+        btn_frame = ttk.Frame(self, style="GlassHighlight.TFrame")
+        btn_frame.pack(fill=tk.X, pady=(8, 16))
 
-        ttk.Label(self.main, text="Status", style="Header.TLabel").pack(anchor=tk.W)
-        self.status = ttk.Label(self.main, text="Ready", style="Status.TLabel")
-        self.status.pack(anchor=tk.W, pady=(4, 8))
+        ttk.Button(btn_frame, text="🏃 Record Lap",
+                  command=self._simulate_lap, style="Success.TButton").pack(side=tk.LEFT, padx=(16, 8))
+        ttk.Button(btn_frame, text="📞 Request Coach",
+                  command=self._request_coach, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="🔄 Refresh",
+                  command=self._refresh, style="Secondary.TButton").pack(side=tk.LEFT)
 
-        ttk.Label(self.main, text="Rest Timer", style="Header.TLabel").pack(anchor=tk.W)
-        self.timer = ttk.Label(self.main, text="-- s", style="Status.TLabel")
-        self.timer.pack(anchor=tk.W, pady=(4, 8))
+        # Main content with glass-style styling
+        self.main = ttk.Frame(self, style="Glass.TFrame", padding=(20, 16))
+        self.main.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
 
-        ttk.Label(self.main, text="Laps Today", style="Header.TLabel").pack(anchor=tk.W)
-        self.lap_label = ttk.Label(self.main, text=f"Laps: {self.lap_count}", style="Status.TLabel")
-        self.lap_label.pack(anchor=tk.W, pady=(4, 12))
+        # Status section
+        ttk.Label(self.main, text="Current Status", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self.status = ttk.Label(self.main, text="Ready", style="Body.TLabel")
+        self.status.pack(anchor=tk.W, pady=(0, 16))
 
-        self.feedback = ttk.Label(self.main, text="Ready for action", wraplength=400)
-        self.feedback.pack(anchor=tk.W, pady=10)
+        # Stats grid
+        stats_frame = ttk.Frame(self.main, style="GlassHighlight.TFrame", padding=(16, 12))
+        stats_frame.pack(fill=tk.X, pady=(0, 16))
 
-        self.chart_frame = ttk.Frame(self.main)
-        self.chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Rest timer
+        ttk.Label(stats_frame, text="Rest Timer", style="Subheader.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.timer = ttk.Label(stats_frame, text="-- s", style="Body.TLabel")
+        self.timer.grid(row=1, column=0, sticky="w", pady=(0, 12))
+
+        # Lap count
+        ttk.Label(stats_frame, text="Laps Completed", style="Subheader.TLabel").grid(row=0, column=1, sticky="w", padx=(24, 0), pady=(0, 4))
+        self.lap_label = ttk.Label(stats_frame, text=f"{self.lap_count}", style="Body.TLabel")
+        self.lap_label.grid(row=1, column=1, sticky="w", padx=(24, 0))
+
+        # Feedback message
+        self.feedback = ttk.Label(self.main, text="Ready for action", style="Caption.TLabel", wraplength=500)
+        self.feedback.pack(anchor=tk.W, pady=(0, 16))
+
+        # Chart section
+        ttk.Label(self.main, text="Pace Trend", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self.chart_frame = ttk.Frame(self.main, style="GlassHighlight.TFrame", padding=(16, 12))
+        self.chart_frame.pack(fill=tk.BOTH, expand=True)
 
         self.fig = None
         self.canvas = None
@@ -84,7 +109,8 @@ class RunnerView(tk.Toplevel):
             my_rest = next((v for v in rest_views if v.runner_id == self.runner_id), None)
             if my_rest:
                 self.timer.config(text=f"{my_rest.remaining_rest_seconds} s")
-                self.status.config(text=f"Resting - {"Ready!" if my_rest.is_ready_to_run else "Wait..."}")
+                ready_label = "Ready!" if my_rest.is_ready_to_run else "Wait..."
+                self.status.config(text=f"Resting - {ready_label}")
             else:
                 self.status.config(text="Running")
         except:
@@ -107,9 +133,28 @@ class RunnerView(tk.Toplevel):
             pass
 
     def _simulate_lap(self):
-        self.lap_count += 1
-        self.lap_label.config(text=f"Laps: {self.lap_count}")
-        self.feedback.config(text=f"✓ Lap {self.lap_count} recorded at {datetime.now().strftime('%H:%M:%S')}")
+        """Record a lap with visual feedback following Apple's feedback principle."""
+        try:
+            if self.scan_rfid_uc and self.runner.rfid_tag:
+                self.scan_rfid_uc.execute(
+                    self.workout_id,
+                    self.runner.rfid_tag,
+                    datetime.now().isoformat()
+                )
+            self.lap_count += 1
+            self.lap_label.config(text=f"{self.lap_count}")
+            self.feedback.config(text=f"Lap {self.lap_count} recorded at {datetime.now().strftime('%H:%M:%S')}", style="Body.TLabel")
+            # Visual feedback - temporarily highlight the lap count
+            self._flash_feedback(self.lap_label, ModernTheme.SUCCESS)
+        except Exception as e:
+            self.feedback.config(text=f"Error: {str(e)[:40]}", style="Caption.TLabel")
+            self._flash_feedback(self.feedback, ModernTheme.DANGER)
+
+    def _flash_feedback(self, widget, color):
+        """Provide visual feedback by briefly changing widget color."""
+        original_bg = widget.cget("background")
+        widget.configure(style="Success.TLabel" if color == ModernTheme.SUCCESS else "Danger.TLabel")
+        self.after(800, lambda: widget.configure(style="Body.TLabel"))
 
     def _request_coach(self):
         self.feedback.config(text="📞 Request sent to coach - awaiting response...")

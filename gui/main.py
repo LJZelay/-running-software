@@ -35,14 +35,10 @@ def main():
     from domain.runner import Runner
     from domain.runnerSession import RunnerSession
 
-    # If no workout exists, create one (ID=1) and add sample runners.
+    # If no workout exists, create one (ID=1) with no runners initially
     existing = repo.get_by_id(1)
     if not existing:
         workout = Workout(workout_id=1, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
-        runner1 = Runner(runner_id=1, name="Alice", email="alice@example.com", nfc_tag="NFC100", rfid_tag="RFID100")
-        runner2 = Runner(runner_id=2, name="Bob", email="bob@example.com", nfc_tag="NFC200", rfid_tag="RFID200")
-        workout.add_runner_session(RunnerSession(runner=runner1, restDuration=60))
-        workout.add_runner_session(RunnerSession(runner=runner2, restDuration=60))
         repo.save(workout)
     else:
         workout = existing
@@ -61,9 +57,6 @@ def main():
     group_start_uc = GroupStartUseCase(repo)
     add_runner_uc = AddRunnerToWorkoutUseCase(repo)
 
-    if workout.status == WorkoutState.NOT_STARTED and workout.runnerSessions:
-        group_start_uc.execute(workout.workout_id)
-
     # Launch GUI windows
     root = tk.Tk()
     coach = CoachView(
@@ -72,25 +65,17 @@ def main():
         get_running_uc,
         get_runner_analytics_uc,
         get_workout_stats_uc,
+        repo=repo,
         workout_id=1,
         start_workout_uc=start_uc,
         end_workout_uc=end_uc,
+        add_runner_uc=add_runner_uc,
+        nfc_uc=nfc_uc,
+        rfid_uc=rfid_uc,
         refresh_interval_ms=1000
     )
     coach.pack(fill=tk.BOTH, expand=True)
-
-    if workout.runnerSessions:
-        runner_window = tk.Toplevel(root)
-        RunnerView(
-            runner_window,
-            get_rest_uc,
-            get_runner_analytics_uc,
-            runner_id=workout.runnerSessions[0].runner.id,
-            workout_id=workout.workout_id,
-            scan_nfc_uc=nfc_uc,
-            scan_rfid_uc=rfid_uc,
-            refresh_interval_ms=1000
-        )
+    coach.runner_windows = []  # Track runner windows for management
 
     root.mainloop()
 
