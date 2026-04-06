@@ -63,13 +63,10 @@ def _process_commands(
     scan_nfc_use_case: ScanNFCUseCase,
     scan_rfid_use_case: ScanRFIDUseCase,
 ) -> None:
-    current_group: List[str] = []
-
     for command in commands:
         if command.command_type == "GROUP":
-            for nfc in command.nfc_tags or []:
-                if nfc not in current_group:
-                    current_group.append(nfc)
+            # GROUP assignments do not set runner start times.
+            # Each runner starts only when their own NFC event is processed.
             continue
 
         if command.command_type == "START":
@@ -78,13 +75,6 @@ def _process_commands(
 
             start_iso = _epoch_ms_to_iso(command.timestamp_ms)
             start_workout_use_case.execute(workout_id, start_iso, use_event_time=True)
-
-            for nfc in current_group:
-                try:
-                    scan_nfc_use_case.execute(workout_id, nfc, start_iso, use_event_time=True)
-                except ValueError:
-                    continue
-            current_group.clear()
             continue
 
         if command.command_type == "NFC":
@@ -128,7 +118,10 @@ def _print_runner_summary(workout, athletes: List[ParsedAthlete]) -> None:
             first_name = name_parts[0] if name_parts else ""
             last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
-        values: List[str] = [first_name, last_name]
+        if last_name:
+            values: List[str] = [first_name, last_name]
+        else:
+            values = [first_name]
 
         for index, interval in enumerate(runner_session.intervals):
             start_iso = interval.get("start")
