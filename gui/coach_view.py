@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
+from matplotlib import pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from typing import List
 
