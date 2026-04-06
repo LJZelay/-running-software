@@ -24,17 +24,20 @@ def plot_pace_trend(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Figure:
         fig.tight_layout()
         return fig
 
+    plotted = False
     for analytics in runner_analytics:
         interval_numbers = [interval.interval_number for interval in analytics.intervals]
         paces = [interval.pace_per_km for interval in analytics.intervals]
         if interval_numbers and paces:
             ax.plot(interval_numbers, paces, marker="o", label=analytics.runner_name)
+            plotted = True
 
     ax.set_title("Runner Pace Trend")
     ax.set_xlabel("Interval")
     ax.set_ylabel("Pace (s per km)")
     ax.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(loc="best", fontsize="small")
+    if plotted:
+        ax.legend(loc="best", fontsize="small")
     fig.tight_layout()
     return fig
 

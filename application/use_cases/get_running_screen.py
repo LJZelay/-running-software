@@ -48,7 +48,7 @@ class GetRunningScreenUseCase:
             laps_completed = 0
             if runner_session.intervals:
                 current_interval = runner_session.intervals[-1]
-                laps_completed = current_interval.lap_count()
+                laps_completed = len(current_interval.get("laps", []))
             
             # Create view DTO
             view = RunnerRunningView(
