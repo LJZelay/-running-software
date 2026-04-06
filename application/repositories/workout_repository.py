@@ -11,3 +11,7 @@ class WorkoutRepository(ABC):
     @abstractmethod
     def save(self, workout: object) -> None:
         pass
+
+    def get_with_sessions(self, workout_id: int) -> Optional[object]:
+        """Default implementation returns the same as get_by_id."""
+        return self.get_by_id(workout_id)

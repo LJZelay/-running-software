@@ -6,7 +6,7 @@ from typing import Tuple
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int
-from domain.runner_state import RunnerState
+from domain.runnerState import RunnerState
 
 
 class GroupStartUseCase:
@@ -50,7 +50,7 @@ class GroupStartUseCase:
         # Start all eligible runners (NOT_STARTED or READY)
         started_count = 0
         for runner_session in workout.runnerSessions:
-            if runner_session.is_not_started() or runner_session.is_ready():
+            if runner_session.state == RunnerState.NOT_STARTED or runner_session.is_ready():
                 try:
                     runner_session.start_interval()
                     started_count += 1

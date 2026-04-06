@@ -7,6 +7,7 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int
+from domain.runnerState import RunnerState
 
 
 class GetRunningScreenUseCase:
@@ -36,9 +37,9 @@ class GetRunningScreenUseCase:
         
         running_views = []
         
-        # Delegate to domain to get running sessions
-        running_sessions = workout.get_running_runner_sessions()
-        
+        # Compute running sessions from the workout sessions directly.
+        running_sessions = [rs for rs in workout.runnerSessions if rs.state == RunnerState.RUNNING]
+
         for runner_session in running_sessions:
             # Get current interval metadata from domain
             interval_number = len(runner_session.intervals)

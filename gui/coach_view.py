@@ -1,8 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
-from typing import List, Optional
+from typing import List
 
 from application.dto.runner_rest_view import RunnerRestView
 from application.dto.runner_running_view import RunnerRunningView
@@ -82,12 +81,19 @@ class CoachView(tk.Frame):
         self.analytics_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.analytics_frame, text="Analytics")
 
+        # Analytics stats summary
+        self.stats_frame = ttk.Frame(self.analytics_frame)
+        self.stats_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+        self.stats_label = ttk.Label(self.stats_frame, text="Workout stats not loaded yet.")
+        self.stats_label.pack(anchor=tk.W)
+
         # Charts container (can be multiple)
         self.chart_frame = ttk.Frame(self.analytics_frame)
-        self.chart_frame.pack(fill=tk.BOTH, expand=True)
+        self.chart_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Placeholder for figures
+        # Placeholder for figures and canvases
         self.figures = []
+        self.canvas_widgets = []
 
     def _start_polling(self):
         """Start periodic updates."""
@@ -134,6 +140,31 @@ class CoachView(tk.Frame):
                 "Yes" if view.is_ready_to_run else "No"
             ))
 
+    def _clear_charts(self):
+        """Destroy all chart widgets and close prior figures before redrawing."""
+        for widget in self.chart_frame.winfo_children():
+            widget.destroy()
+        for fig in self.figures:
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
+        self.figures.clear()
+        self.canvas_widgets.clear()
+
+    def _format_workout_stats(self, workout_stats: WorkoutStatsDTO) -> str:
+        """Create a short summary string for workout statistics."""
+        average_pace = workout_stats.average_pace_per_interval
+        interval_summary = ", ".join(
+            f"{interval}: {pace:.1f}s/km"
+            for interval, pace in sorted(average_pace.items())
+        ) if average_pace else "No intervals completed yet"
+        return (
+            f"Total runners: {workout_stats.total_runners} | "
+            f"Intervals completed: {workout_stats.intervals_completed} | "
+            f"Average pace: {interval_summary}"
+        )
+
     def _update_analytics(self):
         """Update charts with fresh analytics data."""
         try:
@@ -143,10 +174,8 @@ class CoachView(tk.Frame):
             print(f"Error fetching analytics: {e}")
             return
 
-        # Clear previous figures
-        for fig in self.figures:
-            fig.clear()
-        self.figures.clear()
+        self._clear_charts()
+        self.stats_label.config(text=self._format_workout_stats(workout_stats))
 
         # Create a new figure for pace trends
         pace_fig = plot_pace_trend(runner_analytics)
@@ -154,6 +183,7 @@ class CoachView(tk.Frame):
         canvas.draw()
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.figures.append(pace_fig)
+        self.canvas_widgets.append(canvas)
 
         # Optionally add more charts
         # ...
