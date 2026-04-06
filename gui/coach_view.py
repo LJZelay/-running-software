@@ -9,7 +9,7 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_analytics_dto import RunnerAnalyticsDTO
 from application.dto.workout_stats_dto import WorkoutStatsDTO
 from gui.analytics_widgets import plot_pace_trend, plot_split_distribution
-from gui.utils import PollingTimer
+from gui.utils import show_error_dialog, show_info_dialog
 
 
 class CoachView(tk.Frame):
@@ -25,6 +25,8 @@ class CoachView(tk.Frame):
         get_runner_analytics_uc,
         get_workout_stats_uc,
         workout_id: int,
+        start_workout_uc=None,
+        end_workout_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -34,8 +36,11 @@ class CoachView(tk.Frame):
         self.get_running_uc = get_running_uc
         self.get_runner_analytics_uc = get_runner_analytics_uc
         self.get_workout_stats_uc = get_workout_stats_uc
+        self.start_workout_uc = start_workout_uc
+        self.end_workout_uc = end_workout_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
+        self.chart_mode = "pace"
 
         self._setup_ui()
         self._start_polling()
@@ -43,6 +48,31 @@ class CoachView(tk.Frame):
     def _setup_ui(self):
         """Create the UI widgets."""
         self.parent.title("Coach View - Interval Workout Manager")
+
+        self.style = ttk.Style(self)
+        try:
+            self.style.theme_use("vista")
+        except tk.TclError:
+            pass
+        self.style.configure("Header.TLabel", font=("Helvetica", 16, "bold"))
+        self.style.configure("SubHeader.TLabel", font=("Helvetica", 11, "bold"))
+        self.style.configure("Card.TFrame", background="#f7f7f7")
+        self.style.configure("Action.TButton", padding=6)
+
+        toolbar = ttk.Frame(self, padding=(14, 12, 14, 6))
+        toolbar.pack(fill=tk.X)
+        self.title_label = ttk.Label(toolbar, text="Coach Dashboard", style="Header.TLabel")
+        self.title_label.pack(side=tk.LEFT)
+        self.action_status_label = ttk.Label(toolbar, text="Ready", style="SubHeader.TLabel")
+        self.action_status_label.pack(side=tk.RIGHT)
+
+        action_bar = ttk.Frame(self, padding=(14, 0, 14, 10))
+        action_bar.pack(fill=tk.X)
+        ttk.Button(action_bar, text="Refresh", command=self._on_refresh, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_bar, text="Start Workout", command=self._on_start_workout, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_bar, text="End Workout", command=self._on_end_workout, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_bar, text="Export Summary", command=self._on_export_summary, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_bar, text="Toggle Chart", command=self._on_toggle_chart, style="Action.TButton").pack(side=tk.LEFT, padx=4)
 
         # Create a notebook (tabbed interface)
         self.notebook = ttk.Notebook(self)
@@ -87,6 +117,10 @@ class CoachView(tk.Frame):
         self.stats_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
         self.stats_label = ttk.Label(self.stats_frame, text="Workout stats not loaded yet.")
         self.stats_label.pack(anchor=tk.W)
+        self.analytics_controls = ttk.Frame(self.stats_frame)
+        self.analytics_controls.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(self.analytics_controls, text="Refresh Analytics", command=self._on_refresh, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.analytics_controls, text="Export Chart", command=self._on_export_summary, style="Action.TButton").pack(side=tk.LEFT, padx=4)
 
         # Charts container (can be multiple)
         self.chart_frame = ttk.Frame(self.analytics_frame)
@@ -153,6 +187,43 @@ class CoachView(tk.Frame):
         self.figures.clear()
         self.canvas_widgets.clear()
 
+    def _update_action_status(self, message: str):
+        self.action_status_label.config(text=message)
+
+    def _on_refresh(self):
+        self._poll()
+        self._update_action_status("Data refreshed")
+
+    def _on_toggle_chart(self):
+        self.chart_mode = "split" if self.chart_mode == "pace" else "pace"
+        self._update_analytics()
+        chart_name = "split distribution" if self.chart_mode == "split" else "pace trend"
+        self._update_action_status(f"Showing {chart_name}")
+
+    def _on_start_workout(self):
+        try:
+            if self.start_workout_uc is not None:
+                started = self.start_workout_uc.execute(self.workout_id)
+                self._update_action_status("Workout started" if started else "Workout already started")
+            else:
+                show_info_dialog("Start Workout", "Start workout action is currently a placeholder.")
+        except Exception as e:
+            show_error_dialog("Start Workout", str(e))
+
+    def _on_end_workout(self):
+        try:
+            if self.end_workout_uc is not None:
+                ended = self.end_workout_uc.execute(self.workout_id)
+                self._update_action_status("Workout ended" if ended else "Workout already ended")
+            else:
+                show_info_dialog("End Workout", "End workout action is currently a placeholder.")
+        except Exception as e:
+            show_error_dialog("End Workout", str(e))
+
+    def _on_export_summary(self):
+        summary = self.stats_label.cget("text")
+        show_info_dialog("Export Workout Summary", f"Workout summary exported:\n\n{summary}")
+
     def _format_workout_stats(self, workout_stats: WorkoutStatsDTO) -> str:
         """Create a short summary string for workout statistics."""
         average_pace = workout_stats.average_pace_per_interval
@@ -178,12 +249,14 @@ class CoachView(tk.Frame):
         self._clear_charts()
         self.stats_label.config(text=self._format_workout_stats(workout_stats))
 
-        # Create a new figure for pace trends
-        pace_fig = plot_pace_trend(runner_analytics)
-        canvas = FigureCanvasTkAgg(pace_fig, master=self.chart_frame)
+        if self.chart_mode == "split":
+            chart_fig = plot_split_distribution(runner_analytics)
+        else:
+            chart_fig = plot_pace_trend(runner_analytics)
+        canvas = FigureCanvasTkAgg(chart_fig, master=self.chart_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.figures.append(pace_fig)
+        self.figures.append(chart_fig)
         self.canvas_widgets.append(canvas)
 
         # Optionally add more charts

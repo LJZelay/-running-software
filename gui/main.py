@@ -53,7 +53,7 @@ def main():
     get_runner_analytics_uc = GetRunnerAnalyticsUseCase(repo)
     get_workout_stats_uc = GetWorkoutStatsUseCase(repo)
 
-    # For optional controls (if we add them later)
+    # For optional controls
     start_uc = StartWorkoutUseCase(repo)
     end_uc = EndWorkoutUseCase(repo)
     nfc_uc = ScanNFCUseCase(repo)
@@ -73,6 +73,8 @@ def main():
         get_runner_analytics_uc,
         get_workout_stats_uc,
         workout_id=1,
+        start_workout_uc=start_uc,
+        end_workout_uc=end_uc,
         refresh_interval_ms=1000
     )
     coach.pack(fill=tk.BOTH, expand=True)
@@ -85,6 +87,8 @@ def main():
             get_runner_analytics_uc,
             runner_id=workout.runnerSessions[0].runner.id,
             workout_id=workout.workout_id,
+            scan_nfc_uc=nfc_uc,
+            scan_rfid_uc=rfid_uc,
             refresh_interval_ms=1000
         )
 
