@@ -1,21 +1,21 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from typing import List
+from datetime import datetime
+import csv
 
 from application.dto.runner_rest_view import RunnerRestView
 from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_analytics_dto import RunnerAnalyticsDTO
 from application.dto.workout_stats_dto import WorkoutStatsDTO
 from gui.analytics_widgets import plot_pace_trend, plot_split_distribution
-from gui.utils import show_error_dialog, show_info_dialog
+from gui.theme import ModernTheme
 
 
 class CoachView(tk.Frame):
-    """
-    Coach GUI window displaying real-time workout data and analytics.
-    """
+    """Coach dashboard with life status and analytics."""
 
     def __init__(
         self,
@@ -41,223 +41,200 @@ class CoachView(tk.Frame):
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.chart_mode = "pace"
+        self.workout_active = False
 
+        ModernTheme.configure(parent)
         self._setup_ui()
         self._start_polling()
 
     def _setup_ui(self):
         """Create the UI widgets."""
-        self.parent.title("Coach View - Interval Workout Manager")
+        self.parent.title("Coach Dashboard - Interval Workout Manager")
+        self.parent.geometry("1200x800")
 
-        self.style = ttk.Style(self)
-        try:
-            self.style.theme_use("vista")
-        except tk.TclError:
-            pass
-        self.style.configure("Header.TLabel", font=("Helvetica", 16, "bold"))
-        self.style.configure("SubHeader.TLabel", font=("Helvetica", 11, "bold"))
-        self.style.configure("Card.TFrame", background="#f7f7f7")
-        self.style.configure("Action.TButton", padding=6)
+        toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(16, 12))
+        toolbar.pack(fill=tk.X, side=tk.TOP)
 
-        toolbar = ttk.Frame(self, padding=(14, 12, 14, 6))
-        toolbar.pack(fill=tk.X)
-        self.title_label = ttk.Label(toolbar, text="Coach Dashboard", style="Header.TLabel")
-        self.title_label.pack(side=tk.LEFT)
-        self.action_status_label = ttk.Label(toolbar, text="Ready", style="SubHeader.TLabel")
-        self.action_status_label.pack(side=tk.RIGHT)
+        ttk.Label(toolbar, text="Coach Dashboard", style="Title.TLabel").pack(side=tk.LEFT)
+        
+        self.status_badge = tk.Canvas(toolbar, width=150, height=30, bg=ModernTheme.BG_DARK, highlightthickness=0)
+        self.status_badge.pack(side=tk.RIGHT)
+        self._update_status_badge("Standby")
 
-        action_bar = ttk.Frame(self, padding=(14, 0, 14, 10))
-        action_bar.pack(fill=tk.X)
-        ttk.Button(action_bar, text="Refresh", command=self._on_refresh, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(action_bar, text="Start Workout", command=self._on_start_workout, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(action_bar, text="End Workout", command=self._on_end_workout, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(action_bar, text="Export Summary", command=self._on_export_summary, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(action_bar, text="Toggle Chart", command=self._on_toggle_chart, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        action_frame = ttk.Frame(self, style="Toolbar.TFrame", padding=(16, 6))
+        action_frame.pack(fill=tk.X)
 
-        # Create a notebook (tabbed interface)
+        self.btn_start = ttk.Button(action_frame, text="▶ Start", command=self._on_start_workout, style="Success.TButton")
+        self.btn_start.pack(side=tk.LEFT, padx=4)
+
+        self.btn_end = ttk.Button(action_frame, text="⏹ End", command=self._on_end_workout, style="Danger.TButton", state=tk.DISABLED)
+        self.btn_end.pack(side=tk.LEFT, padx=4)
+
+        ttk.Button(action_frame, text="🔄 Refresh", command=self._on_refresh).pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_frame, text="📊 Charts", command=self._on_toggle_chart).pack(side=tk.LEFT, padx=4)
+        ttk.Button(action_frame, text="💾 Export", command=self._on_export).pack(side=tk.LEFT, padx=4)
+
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-        # Tab 1: Live status
-        self.live_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.live_frame, text="Live Status")
+        # Live Status Tab
+        self.live_frame = tk.Frame(self, bg=ModernTheme.BG_DARK)
+        self.notebook.add(self.live_frame, text="🔴 Live")
 
-        # Sub-frames inside live_frame
-        self.running_frame = ttk.LabelFrame(self.live_frame, text="Running Athletes")
-        self.running_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.running_tree = ttk.Treeview(
-            self.running_frame,
-            columns=("name", "interval", "laps", "progress"),
-            show="headings"
-        )
+        ttk.Label(self.live_frame, text="🏃 Running", style="Header.TLabel").pack(anchor=tk.W, padx=10, pady=(10, 4))
+        self.running_tree = ttk.Treeview(self.live_frame, columns=("name", "int", "laps", "prog"), height=8, show="headings")
         self.running_tree.heading("name", text="Name")
-        self.running_tree.heading("interval", text="Interval")
+        self.running_tree.heading("int", text="Interval")
         self.running_tree.heading("laps", text="Laps")
-        self.running_tree.heading("progress", text="Progress")
-        self.running_tree.pack(fill=tk.BOTH, expand=True)
+        self.running_tree.heading("prog", text="Progress")
+        self.running_tree.column("name", width=150)
+        self.running_tree.column("int", width=70)
+        self.running_tree.column("laps", width=70)
+        self.running_tree.column("prog", width=150)
+        self.running_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.resting_frame = ttk.LabelFrame(self.live_frame, text="Resting Athletes")
-        self.resting_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.resting_tree = ttk.Treeview(
-            self.resting_frame,
-            columns=("name", "remaining", "ready"),
-            show="headings"
-        )
+        ttk.Label(self.live_frame, text="😴 Rest", style="Header.TLabel").pack(anchor=tk.W, padx=10, pady=(10, 4))
+        self.resting_tree = ttk.Treeview(self.live_frame, columns=("name", "time", "rdy"), height=6, show="headings")
         self.resting_tree.heading("name", text="Name")
-        self.resting_tree.heading("remaining", text="Remaining Rest (s)")
-        self.resting_tree.heading("ready", text="Ready")
-        self.resting_tree.pack(fill=tk.BOTH, expand=True)
+        self.resting_tree.heading("time", text="Time Left")
+        self.resting_tree.heading("rdy", text="Ready")
+        self.resting_tree.column("name", width=150)
+        self.resting_tree.column("time", width=100)
+        self.resting_tree.column("rdy", width=80)
+        self.resting_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # Tab 2: Analytics
-        self.analytics_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.analytics_frame, text="Analytics")
+        # Analytics Tab
+        self.analytics_frame = tk.Frame(self, bg=ModernTheme.BG_DARK)
+        self.notebook.add(self.analytics_frame, text="📈 Analytics")
 
-        # Analytics stats summary
-        self.stats_frame = ttk.Frame(self.analytics_frame)
-        self.stats_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
-        self.stats_label = ttk.Label(self.stats_frame, text="Workout stats not loaded yet.")
-        self.stats_label.pack(anchor=tk.W)
-        self.analytics_controls = ttk.Frame(self.stats_frame)
-        self.analytics_controls.pack(fill=tk.X, pady=(6, 0))
-        ttk.Button(self.analytics_controls, text="Refresh Analytics", command=self._on_refresh, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(self.analytics_controls, text="Export Chart", command=self._on_export_summary, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Label(self.analytics_frame, text="Stats", style="Header.TLabel").pack(anchor=tk.W, padx=10, pady=(10, 4))
+        self.stats_label = ttk.Label(self.analytics_frame, text="Loading...", style="Status.TLabel")
+        self.stats_label.pack(anchor=tk.W, padx=10, pady=4)
 
-        # Charts container (can be multiple)
         self.chart_frame = ttk.Frame(self.analytics_frame)
-        self.chart_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.chart_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Placeholder for figures and canvases
         self.figures = []
         self.canvas_widgets = []
 
+    def _update_status_badge(self, status: str, color: str = ModernTheme.WARNING):
+        self.status_badge.delete("all")
+        self.status_badge.create_oval(10, 10, 20, 20, fill=color, outline=color)
+        self.status_badge.create_text(35, 15, text=status, fill=ModernTheme.TEXT_PRIMARY, font=("Helvetica", 9, "bold"), anchor="w")
+
     def _start_polling(self):
-        """Start periodic updates."""
         self._poll()
         self.after(self.refresh_interval_ms, self._start_polling)
 
     def _poll(self):
-        """Fetch latest data and update UI."""
-        # Update running and resting tables
         try:
-            running_views = self.get_running_uc.execute(self.workout_id)
-            self._update_running_table(running_views)
+            running = self.get_running_uc.execute(self.workout_id)
+            self._update_running_table(running)
         except Exception as e:
-            print(f"Error fetching running data: {e}")
+            pass
 
         try:
-            resting_views = self.get_rest_uc.execute(self.workout_id)
-            self._update_resting_table(resting_views)
+            resting = self.get_rest_uc.execute(self.workout_id)
+            self._update_resting_table(resting)
         except Exception as e:
-            print(f"Error fetching resting data: {e}")
+            pass
 
-        # Update analytics charts (less frequently maybe)
         self._update_analytics()
 
-    def _update_running_table(self, running_views: List[RunnerRunningView]):
-        """Update the treeview for running athletes."""
+    def _update_running_table(self, views: List[RunnerRunningView]):
         self.running_tree.delete(*self.running_tree.get_children())
-        for view in running_views:
-            progress = f"{view.laps_completed}/{view.laps_per_interval} laps"
-            self.running_tree.insert("", tk.END, values=(
-                view.runner_name,
-                view.interval_number,
-                f"{view.laps_completed}",
-                progress
-            ))
+        for v in views:
+            self.running_tree.insert("", tk.END, values=(v.runner_name, v.interval_number, v.laps_completed, f"{v.laps_completed}/{v.laps_per_interval}"))
 
-    def _update_resting_table(self, resting_views: List[RunnerRestView]):
-        """Update the treeview for resting athletes."""
+    def _update_resting_table(self, views: List[RunnerRestView]):
         self.resting_tree.delete(*self.resting_tree.get_children())
-        for view in resting_views:
-            self.resting_tree.insert("", tk.END, values=(
-                view.runner_name,
-                view.remaining_rest_seconds,
-                "Yes" if view.is_ready_to_run else "No"
-            ))
+        for v in views:
+            self.resting_tree.insert("", tk.END, values=(v.runner_name, v.remaining_rest_seconds, "✓" if v.is_ready_to_run else "✗"))
 
     def _clear_charts(self):
-        """Destroy all chart widgets and close prior figures before redrawing."""
-        for widget in self.chart_frame.winfo_children():
-            widget.destroy()
-        for fig in self.figures:
+        for w in self.chart_frame.winfo_children():
+            w.destroy()
+        for f in self.figures:
             try:
-                plt.close(fig)
-            except Exception:
+                plt.close(f)
+            except:
                 pass
         self.figures.clear()
         self.canvas_widgets.clear()
 
-    def _update_action_status(self, message: str):
-        self.action_status_label.config(text=message)
-
     def _on_refresh(self):
         self._poll()
-        self._update_action_status("Data refreshed")
+        self._update_status_badge("✓", ModernTheme.SUCCESS)
+        self.after(800, lambda: self._update_status_badge("Active ●" if self.workout_active else "Standby", ModernTheme.SUCCESS if self.workout_active else ModernTheme.WARNING))
 
     def _on_toggle_chart(self):
         self.chart_mode = "split" if self.chart_mode == "pace" else "pace"
         self._update_analytics()
-        chart_name = "split distribution" if self.chart_mode == "split" else "pace trend"
-        self._update_action_status(f"Showing {chart_name}")
 
     def _on_start_workout(self):
         try:
-            if self.start_workout_uc is not None:
-                started = self.start_workout_uc.execute(self.workout_id)
-                self._update_action_status("Workout started" if started else "Workout already started")
-            else:
-                show_info_dialog("Start Workout", "Start workout action is currently a placeholder.")
+            if self.start_workout_uc:
+                self.start_workout_uc.execute(self.workout_id)
+                self.workout_active = True
+                self.btn_start.config(state=tk.DISABLED)
+                self.btn_end.config(state=tk.NORMAL)
+                self._update_status_badge("▶ Active", ModernTheme.SUCCESS)
         except Exception as e:
-            show_error_dialog("Start Workout", str(e))
+            self._update_status_badge("Error", ModernTheme.DANGER)
 
     def _on_end_workout(self):
         try:
-            if self.end_workout_uc is not None:
-                ended = self.end_workout_uc.execute(self.workout_id)
-                self._update_action_status("Workout ended" if ended else "Workout already ended")
-            else:
-                show_info_dialog("End Workout", "End workout action is currently a placeholder.")
+            if self.end_workout_uc:
+                self.end_workout_uc.execute(self.workout_id)
+                self.workout_active = False
+                self.btn_start.config(state=tk.NORMAL)
+                self.btn_end.config(state=tk.DISABLED)
+                self._update_status_badge("⏹ Ended", ModernTheme.DANGER)
         except Exception as e:
-            show_error_dialog("End Workout", str(e))
+            self._update_status_badge("Error", ModernTheme.DANGER)
 
-    def _on_export_summary(self):
-        summary = self.stats_label.cget("text")
-        show_info_dialog("Export Workout Summary", f"Workout summary exported:\n\n{summary}")
+    def _on_export(self):
+        try:
+            stats = self.get_workout_stats_uc.execute(self.workout_id)
+            analytics = self.get_runner_analytics_uc.execute(self.workout_id)
 
-    def _format_workout_stats(self, workout_stats: WorkoutStatsDTO) -> str:
-        """Create a short summary string for workout statistics."""
-        average_pace = workout_stats.average_pace_per_interval
-        interval_summary = ", ".join(
-            f"{interval}: {pace:.1f}s/km"
-            for interval, pace in sorted(average_pace.items())
-        ) if average_pace else "No intervals completed yet"
-        return (
-            f"Total runners: {workout_stats.total_runners} | "
-            f"Intervals completed: {workout_stats.intervals_completed} | "
-            f"Average pace: {interval_summary}"
-        )
+            path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+            if not path:
+                return
+
+            with open(path, 'w', newline='') as f:
+                w = csv.writer(f)
+                w.writerow(["Workout Summary"])
+                w.writerow(["Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                w.writerow([])
+                w.writerow(["Total Runners", stats.total_runners])
+                w.writerow(["Intervals", stats.intervals_completed])
+                w.writerow([])
+                w.writerow(["Runner", "Avg Pace", "Eff", "Count"])
+                for a in analytics:
+                    w.writerow([a.runner_name, f"{a.overall_avg_pace:.2f}", f"{(a.rest_efficiency*100 if a.rest_efficiency else 0):.0f}%", len(a.intervals)])
+
+            self._update_status_badge("✓ Export", ModernTheme.SUCCESS)
+        except:
+            self._update_status_badge("Export fail", ModernTheme.DANGER)
 
     def _update_analytics(self):
-        """Update charts with fresh analytics data."""
         try:
-            runner_analytics = self.get_runner_analytics_uc.execute(self.workout_id)
-            workout_stats = self.get_workout_stats_uc.execute(self.workout_id)
-        except Exception as e:
-            print(f"Error fetching analytics: {e}")
+            analytics = self.get_runner_analytics_uc.execute(self.workout_id)
+            stats = self.get_workout_stats_uc.execute(self.workout_id)
+        except:
             return
 
         self._clear_charts()
-        self.stats_label.config(text=self._format_workout_stats(workout_stats))
+        self.stats_label.config(text=f"Runners: {stats.total_runners} | Intervals: {stats.intervals_completed}")
 
-        if self.chart_mode == "split":
-            chart_fig = plot_split_distribution(runner_analytics)
-        else:
-            chart_fig = plot_pace_trend(runner_analytics)
-        canvas = FigureCanvasTkAgg(chart_fig, master=self.chart_frame)
+        if not analytics:
+            ttk.Label(self.chart_frame, text="No data", style="Status.TLabel").pack(pady=40)
+            return
+
+        fig = plot_split_distribution(analytics) if self.chart_mode == "split" else plot_pace_trend(analytics)
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.figures.append(chart_fig)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.figures.append(fig)
         self.canvas_widgets.append(canvas)
-
-        # Optionally add more charts
-        # ...

@@ -1,19 +1,16 @@
 import tkinter as tk
 from tkinter import ttk
+from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from typing import List
 
-from application.dto.runner_rest_view import RunnerRestView
 from application.dto.runner_analytics_dto import RunnerAnalyticsDTO
 from gui.analytics_widgets import plot_pace_trend_for_single
-from gui.utils import show_info_dialog
+from gui.theme import ModernTheme
 
 
 class RunnerView(tk.Toplevel):
-    """
-    Runner-specific view showing personal rest timer and pace trend.
-    """
+    """Runner personal view with stats and controls."""
 
     def __init__(
         self,
@@ -28,7 +25,6 @@ class RunnerView(tk.Toplevel):
         **kwargs
     ):
         super().__init__(parent, **kwargs)
-        self.parent = parent
         self.get_rest_uc = get_rest_uc
         self.get_runner_analytics_uc = get_runner_analytics_uc
         self.scan_nfc_uc = scan_nfc_uc
@@ -36,47 +32,44 @@ class RunnerView(tk.Toplevel):
         self.runner_id = runner_id
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
+        self.lap_count = 0
 
-        self.title("Runner View")
+        self.title("Runner Dashboard")
+        self.geometry("700x600")
+        ModernTheme.configure(self)
         self._setup_ui()
         self._start_polling()
 
     def _setup_ui(self):
-        self.style = ttk.Style(self)
-        try:
-            self.style.theme_use("vista")
-        except tk.TclError:
-            pass
-        self.style.configure("Header.TLabel", font=("Helvetica", 16, "bold"))
-        self.style.configure("SubHeader.TLabel", font=("Helvetica", 11, "bold"))
-        self.style.configure("Action.TButton", padding=6)
+        ttk.Label(self, text="Runner Dashboard", style="Title.TLabel").pack(side=tk.TOP, padx=16, pady=(12, 6))
 
-        self.main_frame = ttk.Frame(self, padding=12)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        btn_frame = ttk.Frame(self, style="Toolbar.TFrame", padding=(16, 6))
+        btn_frame.pack(fill=tk.X)
 
-        self.title_label = ttk.Label(self.main_frame, text="Runner Dashboard", style="Header.TLabel")
-        self.title_label.pack(anchor=tk.W, pady=(0, 8))
+        ttk.Button(btn_frame, text="🏃 Simulate Lap", command=self._simulate_lap, style="Success.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="📞 Request Coach", command=self._request_coach).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="🔄 Refresh", command=self._refresh).pack(side=tk.LEFT, padx=4)
 
-        button_bar = ttk.Frame(self.main_frame)
-        button_bar.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(button_bar, text="Refresh", command=self._refresh_view, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(button_bar, text="Simulate Lap", command=self._on_simulate_lap, style="Action.TButton").pack(side=tk.LEFT, padx=4)
-        ttk.Button(button_bar, text="Request Coach", command=self._on_request_coach, style="Action.TButton").pack(side=tk.LEFT, padx=4)
+        self.main = ttk.Frame(self, padding=16)
+        self.main.pack(fill=tk.BOTH, expand=True)
 
-        self.status_label = ttk.Label(self.main_frame, text="Status: --", style="SubHeader.TLabel")
-        self.status_label.pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(self.main, text="Status", style="Header.TLabel").pack(anchor=tk.W)
+        self.status = ttk.Label(self.main, text="Ready", style="Status.TLabel")
+        self.status.pack(anchor=tk.W, pady=(4, 8))
 
-        self.timer_label = ttk.Label(self.main_frame, text="Rest remaining: --")
-        self.timer_label.pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(self.main, text="Rest Timer", style="Header.TLabel").pack(anchor=tk.W)
+        self.timer = ttk.Label(self.main, text="-- s", style="Status.TLabel")
+        self.timer.pack(anchor=tk.W, pady=(4, 8))
 
-        self.ready_label = ttk.Label(self.main_frame, text="Ready to run: --")
-        self.ready_label.pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(self.main, text="Laps Today", style="Header.TLabel").pack(anchor=tk.W)
+        self.lap_label = ttk.Label(self.main, text=f"Laps: {self.lap_count}", style="Status.TLabel")
+        self.lap_label.pack(anchor=tk.W, pady=(4, 12))
 
-        self.feedback_label = ttk.Label(self.main_frame, text="Coach feedback will appear here.", wraplength=300)
-        self.feedback_label.pack(fill=tk.X, pady=(0, 10))
+        self.feedback = ttk.Label(self.main, text="Ready for action", wraplength=400)
+        self.feedback.pack(anchor=tk.W, pady=10)
 
-        self.chart_frame = ttk.Frame(self.main_frame)
-        self.chart_frame.pack(fill=tk.BOTH, expand=True)
+        self.chart_frame = ttk.Frame(self.main)
+        self.chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         self.fig = None
         self.canvas = None
@@ -86,20 +79,17 @@ class RunnerView(tk.Toplevel):
         self.after(self.refresh_interval_ms, self._start_polling)
 
     def _poll(self):
-        # Fetch rest data (assuming we can filter by runner)
-        resting_views = self.get_rest_uc.execute(self.workout_id)
-        my_rest = next((v for v in resting_views if v.runner_id == self.runner_id), None)
+        try:
+            rest_views = self.get_rest_uc.execute(self.workout_id)
+            my_rest = next((v for v in rest_views if v.runner_id == self.runner_id), None)
+            if my_rest:
+                self.timer.config(text=f"{my_rest.remaining_rest_seconds} s")
+                self.status.config(text=f"Resting - {"Ready!" if my_rest.is_ready_to_run else "Wait..."}")
+            else:
+                self.status.config(text="Running")
+        except:
+            pass
 
-        if my_rest:
-            self.timer_label.config(text=f"Rest remaining: {my_rest.remaining_rest_seconds} s")
-            self.ready_label.config(text=f"Ready to run: {'Yes' if my_rest.is_ready_to_run else 'No'}")
-            self.status_label.config(text="Resting")
-        else:
-            # Check if runner is running (maybe via get_running_uc, but we don't have it here)
-            # For simplicity, we'll just indicate no rest data
-            self.status_label.config(text="Running or not started")
-
-        # Fetch analytics and update pace trend chart
         try:
             analytics = self.get_runner_analytics_uc.execute(self.workout_id)
             my_analytics = next((a for a in analytics if a.runner_id == self.runner_id), None)
@@ -110,23 +100,20 @@ class RunnerView(tk.Toplevel):
                     self.canvas.draw()
                     self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
                 else:
-                    # Update existing figure
                     self.fig.clear()
                     self.fig = plot_pace_trend_for_single(my_analytics, fig=self.fig)
                     self.canvas.draw()
-        except Exception as e:
-            print(f"Error updating runner view: {e}")
+        except:
+            pass
 
-    def _refresh_view(self):
+    def _simulate_lap(self):
+        self.lap_count += 1
+        self.lap_label.config(text=f"Laps: {self.lap_count}")
+        self.feedback.config(text=f"✓ Lap {self.lap_count} recorded at {datetime.now().strftime('%H:%M:%S')}")
+
+    def _request_coach(self):
+        self.feedback.config(text="📞 Request sent to coach - awaiting response...")
+
+    def _refresh(self):
         self._poll()
-        self._update_feedback("Data refreshed for your session.")
-
-    def _on_simulate_lap(self):
-        self._update_feedback("Simulated lap recorded. Your coach can review the update.")
-
-    def _on_request_coach(self):
-        show_info_dialog("Coach Request", "A request has been sent to your coach. Response will appear here.")
-        self._update_feedback("Coach request sent.")
-
-    def _update_feedback(self, message: str):
-        self.feedback_label.config(text=message)
+        self.feedback.config(text="✓ Data refreshed")
