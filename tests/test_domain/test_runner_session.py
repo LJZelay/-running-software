@@ -113,3 +113,85 @@ class TestRunnerSessionStateTransitions:
         
         with pytest.raises(ValueError, match="Cannot record lap"):
             session.record_lap()
+
+    def test_duplicate_rfid_inside_window_is_ignored(self):
+        runner = load_athlete_from_csv(0)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        session.start_interval("2026-02-08T10:00:00")
+
+        first = session.process_rfid_read(
+            lapsPerInterval=4,
+            timestamp="2026-02-08T10:00:05",
+            debounce_ms=200,
+        )
+        second = session.process_rfid_read(
+            lapsPerInterval=4,
+            timestamp="2026-02-08T10:00:05.100000",
+            debounce_ms=200,
+        )
+
+        assert first.decision == "accepted"
+        assert second.decision == "ignored"
+        assert second.reason == "duplicate_within_window"
+        assert len(session.intervals[-1]["laps"]) == 1
+
+    def test_out_of_order_rfid_is_ignored_without_mutation(self):
+        runner = load_athlete_from_csv(1)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        session.start_interval("2026-02-08T10:00:00")
+        accepted = session.process_rfid_read(
+            lapsPerInterval=4,
+            timestamp="2026-02-08T10:00:10",
+            debounce_ms=200,
+        )
+        ignored = session.process_rfid_read(
+            lapsPerInterval=4,
+            timestamp="2026-02-08T10:00:09",
+            debounce_ms=200,
+        )
+
+        assert accepted.decision == "accepted"
+        assert ignored.decision == "ignored"
+        assert ignored.reason == "out_of_order_timestamp"
+        assert len(session.intervals[-1]["laps"]) == 1
+
+    def test_invalid_timestamp_is_ignored_without_mutation(self):
+        runner = load_athlete_from_csv(2)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        session.start_interval("2026-02-08T10:00:00")
+        result = session.process_rfid_read(
+            lapsPerInterval=4,
+            timestamp="not-a-timestamp",
+            debounce_ms=200,
+        )
+
+        assert result.decision == "ignored"
+        assert result.reason == "invalid_timestamp"
+        assert len(session.intervals[-1]["laps"]) == 0
+
+    def test_nfc_invalid_timestamp_logs_ignored_reason(self, caplog):
+        runner = load_athlete_from_csv(0)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        with caplog.at_level("INFO"):
+            accepted = session.process_nfc_start(timestamp="not-a-timestamp", debounce_ms=200)
+
+        assert accepted is False
+        assert session.state == RunnerState.NOT_STARTED
+        assert "event=nfc_start decision=ignored reason=invalid_timestamp" in caplog.text
+
+    def test_nfc_duplicate_logs_ignored_reason(self, caplog):
+        runner = load_athlete_from_csv(0)
+        session = RunnerSession(runner=runner, restDuration=30)
+
+        session.process_nfc_start(timestamp="2026-02-08T10:00:00", debounce_ms=200)
+
+        with caplog.at_level("INFO"):
+            accepted = session.process_nfc_start(timestamp="2026-02-08T10:00:00.050000", debounce_ms=200)
+
+        assert accepted is False
+        assert len(session.intervals) == 1
+        assert "event=nfc_start decision=ignored reason=duplicate_within_window" in caplog.text

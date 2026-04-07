@@ -38,7 +38,7 @@ class TestRunnerCreation:
         assert runner.name == "Alice"
         assert runner.email == "alice@example.com"
         assert runner.nfc_tag == "NFC001"
-        assert runner.rfid_tag == "RFID001"
+        assert runner.rfid_tag == "300833B2DDD9014000000001"
 
 
 @pytest.mark.domain
@@ -52,7 +52,7 @@ class TestRunnerSerialization:
         
         assert runner_dict["name"] == "Alice"
         assert runner_dict["nfc_tag"] == "NFC001"
-        assert runner_dict["rfid_tag"] == "RFID001"
+        assert runner_dict["rfid_tag"] == "300833B2DDD9014000000001"
     
     def test_runner_from_dict_conversion(self):
         """Test that runner can be created from dictionary."""
