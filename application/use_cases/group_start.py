@@ -52,15 +52,15 @@ class GroupStartUseCase:
         ready_count = 0
         for runner_session in workout.runnerSessions:
             if runner_session.state == RunnerState.NOT_STARTED or runner_session.is_ready():
-            if selected_tags is not None and runner_session.runner.nfc_tag not in selected_tags:
-                continue
-            if runner_session.state == RunnerState.NOT_STARTED:
-                try:
-                    runner_session.mark_ready()
-                    ready_count += 1
-                except ValueError:
-                    # Skip if runner cannot be prepared for any reason
+                if selected_tags is not None and runner_session.runner.nfc_tag not in selected_tags:
                     continue
+                if runner_session.state == RunnerState.NOT_STARTED:
+                    try:
+                        runner_session.mark_ready()
+                        ready_count += 1
+                    except ValueError:
+                        # Skip if runner cannot be prepared for any reason
+                        continue
         
         # Save updated workout
         self.workout_repository.save(workout)
