@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from application.dto.workout_status_view import WorkoutStatusView
 from application.rfid_contracts import RFIDDecision, RFIDReason
+from typing import Optional
 
 
 @dataclass(frozen=True)

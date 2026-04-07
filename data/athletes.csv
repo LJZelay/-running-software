@@ -1,7 +1,7 @@
 name,nfc_id,rfid_id,email
-Alice,NFC001,RFID001,alice@example.com
-Bob,NFC002,RFID002,bob@example.com
-Charlie,NFC003,RFID003,charlie@example.com
-Diana,NFC004,RFID004,diana@example.com
-Eve,NFC005,RFID005,eve@example.com
-Jessica,NFC006,RFID006,jessica@example.com
+Alice,NFC001,300833B2DDD9014000000001,alice@example.com
+Bob,NFC002,300833B2DDD9014000000002,bob@example.com
+Charlie,NFC003,300833B2DDD9014000000003,charlie@example.com
+Diana,NFC004,300833B2DDD9014000000004,diana@example.com
+Eve,NFC005,E28011606000020520A0614E,eve@example.com
+Jessica,NFC006,E2801160600002050000000A,jessica@example.com

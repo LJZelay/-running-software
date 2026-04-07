@@ -1,8 +1,5 @@
-"""
-Use case for group start - starting all eligible runners in a workout simultaneously.
-Implementation delegates to domain instead of inspecting state internally.
-"""
-from typing import Tuple
+"""Use case for group start - activate workout and prepare selected runners via NFC."""
+from typing import Optional, Tuple
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
 from application.input_validation import validate_positive_int
@@ -10,20 +7,22 @@ from domain.runnerState import RunnerState
 
 
 class GroupStartUseCase:
-    """Use case for starting all eligible runners in a workout at once."""
+    """Use case for activating a workout and preparing selected runners in the group."""
     
     def __init__(self, workout_repository: WorkoutRepository):
         self.workout_repository = workout_repository
     
-    def execute(self, workout_id: int) -> Tuple[int, int, int]:
+    def execute(self, workout_id: int, group_nfc_tags: Optional[list[str]] = None) -> Tuple[int, int, int]:
         """
-        Start all eligible runners in the workout.
+        Activate workout and move selected NOT_STARTED runners to READY.
         
         Args:
             workout_id: ID of the workout
+            group_nfc_tags: NFC tags that define the selected group. If omitted,
+                all runners in the workout are considered selected.
         
         Returns:
-            Tuple of (started_count, active_count, resting_count)
+            Tuple of (ready_count, active_count, resting_count)
         
         Raises:
             WorkoutNotFoundError: If workout doesn't exist
@@ -47,15 +46,19 @@ class GroupStartUseCase:
         if not workout.is_active():
             raise ValueError(f"Cannot start group: Workout is {workout.status.value}")
         
-        # Start all eligible runners (NOT_STARTED or READY)
-        started_count = 0
+        selected_tags = set(group_nfc_tags) if group_nfc_tags else None
+
+        # Group start only prepares selected runners; NFC scans begin intervals.
+        ready_count = 0
         for runner_session in workout.runnerSessions:
-            if runner_session.is_not_started() or runner_session.is_ready():
+            if selected_tags is not None and runner_session.runner.nfc_tag not in selected_tags:
+                continue
+            if runner_session.state == RunnerState.NOT_STARTED:
                 try:
-                    runner_session.start_interval()
-                    started_count += 1
+                    runner_session.mark_ready()
+                    ready_count += 1
                 except ValueError:
-                    # Skip if runner cannot be started for any reason
+                    # Skip if runner cannot be prepared for any reason
                     continue
         
         # Save updated workout
@@ -64,4 +67,4 @@ class GroupStartUseCase:
         # Get current counts
         active_count, resting_count = workout.get_runner_counts()
         
-        return started_count, active_count, resting_count
+        return ready_count, active_count, resting_count

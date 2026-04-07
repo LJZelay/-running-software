@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Union
 
+from domain.rfid_event_result import RFIDEventResult, IGNORED_DECISION, UNKNOWN_TAG_REASON
 from domain.runnerSession import RunnerSession
 from domain.workoutState import WorkoutState
 from domain.runnerState import RunnerState
@@ -84,9 +85,9 @@ class Workout:
         if rs is None:
             raise ValueError("Unknown NFC tag")
 
-        rs.start_interval(timestamp)
+        rs.process_nfc_start(timestamp=timestamp)
 
-    def record_rfid_event(self, rfid_tag: str, timestamp: Optional[str] = None) -> RunnerState:
+    def record_rfid_event(self, rfid_tag: str, timestamp: Optional[str] = None, debounce_ms: int = 200) -> RFIDEventResult:
         """
         RFID detection while running.
         RunnerSession owns the finish logic now.
@@ -96,10 +97,9 @@ class Workout:
 
         rs = self._find_runner_session_by_rfid(rfid_tag)
         if rs is None:
-            raise ValueError("Unknown RFID tag")
+            return RFIDEventResult(decision=IGNORED_DECISION, reason=UNKNOWN_TAG_REASON)
 
-        # moved finish orchestration into session
-        return rs.record_lap_and_update_state(self.lapsPerInterval, timestamp)
+        return rs.process_rfid_read(self.lapsPerInterval, timestamp=timestamp, debounce_ms=debounce_ms)
 
     def get_rest_screen(self) -> List[dict]:
         """

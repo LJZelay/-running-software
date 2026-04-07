@@ -1,7 +1,20 @@
 from datetime import datetime
+import logging
 from typing import List, Optional, Any, Dict, Union
 from domain.runner import Runner
+from domain.rfid_event_result import (
+    ACCEPTED_DECISION,
+    DUPLICATE_WITHIN_WINDOW_REASON,
+    IGNORED_DECISION,
+    INVALID_TIMESTAMP_REASON,
+    OUT_OF_ORDER_REASON,
+    RFIDEventResult,
+    VALID_FINISH_REASON,
+)
 from domain.runnerState import RunnerState
+
+
+logger = logging.getLogger(__name__)
 
 
 class RunnerSession:
@@ -29,6 +42,8 @@ class RunnerSession:
         state: Optional[Union[RunnerState, str]] = None,
         intervals: Optional[List[Dict[str, Any]]] = None,
         rests: Optional[List[Dict[str, Any]]] = None,
+        lastAcceptedRfidEpochMs: Optional[int] = None,
+        lastAcceptedNfcEpochMs: Optional[int] = None,
     ):
         self.runner = runner
         self.restDuration = restDuration
@@ -44,10 +59,18 @@ class RunnerSession:
 
         self.intervals = [] if intervals is None else intervals
         self.rests = [] if rests is None else rests
+        self.lastAcceptedRfidEpochMs = lastAcceptedRfidEpochMs
+        self.lastAcceptedNfcEpochMs = lastAcceptedNfcEpochMs
 
     # ---------------------------
     # Domain Behavior
     # ---------------------------
+
+    def mark_ready(self) -> None:
+        """Move a runner from NOT_STARTED to READY after group start activation."""
+        if self.state != RunnerState.NOT_STARTED:
+            raise ValueError("Runner cannot be marked ready from current state")
+        self.state = RunnerState.READY
 
     def start_interval(self, timestamp: Optional[str] = None) -> None:
         # Start interval when NFC is scanned.
@@ -71,6 +94,45 @@ class RunnerSession:
             "end": None
         })
         self.state = RunnerState.RUNNING
+
+    def process_nfc_start(self, timestamp: Optional[str] = None, debounce_ms: int = 200) -> bool:
+        """Apply NFC acceptance rules before starting an interval."""
+        resolved = self._resolve_iso_and_epoch(timestamp)
+        if resolved is None:
+            logger.info(
+                "event=nfc_start decision=ignored reason=invalid_timestamp runner_id=%s nfc_tag=%s",
+                self.runner.id,
+                self.runner.nfc_tag,
+            )
+            return False
+
+        start_iso, start_epoch_ms = resolved
+
+        if self.lastAcceptedNfcEpochMs is not None:
+            if start_epoch_ms < self.lastAcceptedNfcEpochMs:
+                logger.info(
+                    "event=nfc_start decision=ignored reason=out_of_order_timestamp runner_id=%s nfc_tag=%s",
+                    self.runner.id,
+                    self.runner.nfc_tag,
+                )
+                return False
+
+            if (start_epoch_ms - self.lastAcceptedNfcEpochMs) < debounce_ms:
+                logger.info(
+                    "event=nfc_start decision=ignored reason=duplicate_within_window runner_id=%s nfc_tag=%s",
+                    self.runner.id,
+                    self.runner.nfc_tag,
+                )
+                return False
+
+        self.start_interval(start_iso)
+        self.lastAcceptedNfcEpochMs = start_epoch_ms
+        logger.info(
+            "event=nfc_start decision=accepted reason=valid_start runner_id=%s nfc_tag=%s",
+            self.runner.id,
+            self.runner.nfc_tag,
+        )
+        return True
 
     def record_lap(self, timestamp: Optional[str] = None) -> None:
         """
@@ -99,6 +161,55 @@ class RunnerSession:
         if self.should_finish_interval(lapsPerInterval):
             self.finish_interval(timestamp)
         return self.state
+
+    def process_rfid_read(
+        self,
+        lapsPerInterval: int,
+        timestamp: Optional[str] = None,
+        debounce_ms: int = 200,
+    ) -> RFIDEventResult:
+        """Apply RFID read acceptance rules before mutating lap/rest state."""
+        if self.state != RunnerState.RUNNING:
+            raise ValueError("Cannot record lap unless runner is running")
+
+        resolved = self._resolve_iso_and_epoch(timestamp)
+        if resolved is None:
+            return RFIDEventResult(decision=IGNORED_DECISION, reason=INVALID_TIMESTAMP_REASON, state=self.state)
+
+        lap_iso, lap_epoch_ms = resolved
+
+        if self.lastAcceptedRfidEpochMs is not None:
+            if lap_epoch_ms < self.lastAcceptedRfidEpochMs:
+                return RFIDEventResult(decision=IGNORED_DECISION, reason=OUT_OF_ORDER_REASON, state=self.state)
+
+            if (lap_epoch_ms - self.lastAcceptedRfidEpochMs) < debounce_ms:
+                return RFIDEventResult(
+                    decision=IGNORED_DECISION,
+                    reason=DUPLICATE_WITHIN_WINDOW_REASON,
+                    state=self.state,
+                )
+
+        self.record_lap(lap_iso)
+        self.lastAcceptedRfidEpochMs = lap_epoch_ms
+
+        if self.should_finish_interval(lapsPerInterval):
+            self.finish_interval(lap_iso)
+
+        return RFIDEventResult(decision=ACCEPTED_DECISION, reason=VALID_FINISH_REASON, state=self.state)
+
+    @staticmethod
+    def _resolve_iso_and_epoch(timestamp: Optional[str]) -> Optional[tuple[str, int]]:
+        if timestamp is None:
+            now_iso = datetime.now().isoformat()
+            now_epoch_ms = int(datetime.fromisoformat(now_iso).timestamp() * 1000)
+            return now_iso, now_epoch_ms
+
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+
+        return timestamp, int(parsed.timestamp() * 1000)
 
     def finish_interval(self, timestamp: Optional[str] = None) -> None:
         """
@@ -170,6 +281,8 @@ class RunnerSession:
             "state": self.state.value, 
             "intervals": self.intervals,
             "rests": self.rests,
+            "lastAcceptedRfidEpochMs": self.lastAcceptedRfidEpochMs,
+            "lastAcceptedNfcEpochMs": self.lastAcceptedNfcEpochMs,
         }
 
     @classmethod
@@ -180,4 +293,6 @@ class RunnerSession:
             state=data.get("state"),
             intervals=data.get("intervals"),
             rests=data.get("rests"),
+            lastAcceptedRfidEpochMs=data.get("lastAcceptedRfidEpochMs"),
+            lastAcceptedNfcEpochMs=data.get("lastAcceptedNfcEpochMs"),
         )
