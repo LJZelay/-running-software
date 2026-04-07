@@ -23,7 +23,7 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     env:
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "0"
       PYTHONFAULTHANDLER: "1"
       PYTHONUNBUFFERED: "1"
 
