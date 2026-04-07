@@ -51,20 +51,29 @@ class ReaderRfidImpinjRest:
     def _run(self):
         try:
             # Match the expected scanner lifecycle: stop previous profile, then start inventory.
-            requests.post(urljoin(self.hostname, "api/v1/profiles/stop"), verify=False)
+            requests.post(urljoin(self.hostname, "api/v1/profiles/stop"), verify=False, timeout=3)
             requests.post(
                 urljoin(self.hostname, "api/v1/profiles/inventory/presets/default/start"),
                 verify=False,
+                timeout=3,
             )
             while self.running:
                 # Stream newline-delimited JSON events from the scanner endpoint.
-                response = requests.get(urljoin(self.hostname, "api/v1/data/stream"), verify=False, stream=True)
-                for event_data in response.iter_lines():
-                    if not self.running:
-                        break
-                    event_tuple = self.extract_rfid_data(event_data)
-                    if event_tuple:
-                        self.event_q.put(event_tuple)
+                response = requests.get(
+                    urljoin(self.hostname, "api/v1/data/stream"),
+                    verify=False,
+                    stream=True,
+                    timeout=(3, 1),
+                )
+                try:
+                    for event_data in response.iter_lines():
+                        if not self.running:
+                            break
+                        event_tuple = self.extract_rfid_data(event_data)
+                        if event_tuple:
+                            self.event_q.put(event_tuple)
+                finally:
+                    response.close()
         except Exception:
             # Keep adapter thread alive expectations simple: reader stops on any transport/parsing failure.
             self.running = False
@@ -80,4 +89,4 @@ class ReaderRfidImpinjRest:
     def stop(self):
         self.running = False
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=2.0)
