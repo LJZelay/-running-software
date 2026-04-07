@@ -1,0 +1,57 @@
+name: pytest
+
+on:
+  # 1. Manual trigger
+  workflow_dispatch:
+  
+  # 2. When a pull request is approved for merging to main
+  pull_request_review:
+    types: [submitted]
+  
+  # 3. When anything is pushed to main
+  push:
+    branches:
+      - main
+
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'  # Adjust to your Python version
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-html pytest-cov
+        # Install your project dependencies
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Run tests with pytest
+      run: |
+        pytest \
+          --html=test-report.html \
+          --self-contained-html \
+          --cov=. \
+          --cov-report=html:coverage_html \
+          -v
+
+    - name: Upload test results
+      if: always()  # Run even if previous steps fail
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          test-report.html
+          coverage_html/
