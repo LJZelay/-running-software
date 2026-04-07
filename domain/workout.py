@@ -148,6 +148,13 @@ class Workout:
 
         return resting
 
+    def get_running_runner_sessions(self) -> List[RunnerSession]:
+        """Returns all runner sessions currently running."""
+        if self.status != WorkoutState.ACTIVE:
+            return []
+
+        return [rs for rs in self.runnerSessions if rs.state == RunnerState.RUNNING]
+
     # ---------------------------
     # Helper functions
     # ---------------------------
