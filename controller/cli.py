@@ -11,6 +11,8 @@ import sys
 import os
 import csv
 import time
+import logging
+import threading
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +28,20 @@ from application.dto.runner_running_view import RunnerRunningView
 from application.dto.runner_summary_view import RunnerSummaryView
 from application.dto.workout_status_view import WorkoutStatusView
 from application.exceptions import WorkoutNotFoundError, InvalidApplicationRequestError
+from application.rfid_contracts import HardwareEventType, RFIDDecision, RFIDReason, RFIDRuntimeConfig
+from application.services.rfid_worker_service import RFIDWorkerService
+from externalInterface.scanner_event_utils import build_event_envelope
+from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
+
+try:
+    from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter
+except ImportError:
+    create_rfid_rest_adapter = None
+
+try:
+    from externalInterface.reader_hardware_adapter import create_nfc_adapter
+except ImportError:
+    create_nfc_adapter = None
 from application.last_roster_service import LastRosterService
 
 # Repository imports
@@ -219,9 +235,13 @@ class EventCSVProcessor:
                 
                 for row_num, row in enumerate(reader, start=2):
                     try:
-                        event_type = row['TYPE'].strip().upper()
-                        timestamp = row['TIMESTAMP'].strip()
-                        tag = row.get('TAG', '').strip() if 'TAG' in row else ''
+                        raw_type = row.get('TYPE')
+                        raw_timestamp = row.get('TIMESTAMP')
+                        raw_tag = row.get('TAG') if 'TAG' in row else ''
+
+                        event_type = (raw_type or '').strip().upper()
+                        timestamp = (raw_timestamp or '').strip()
+                        tag = (raw_tag or '').strip()
                         
                         # Validate
                         if not event_type:
@@ -280,21 +300,25 @@ class EventCSVProcessor:
                             print(f"    - Event {event_num}: {runner_session.runner.name} already in group")
                     else:
                         print(f"    ⚠ Event {event_num}: Unknown NFC tag {tag} for GROUP event")
+                        return False, f"Unknown NFC tag {tag} for GROUP event"
             
             elif event_type == 'START':
                 # Trigger group start
                 if self.cli.group_nfc_tags and self.cli.group_start_uc:
                     try:
                         started_count, active_count, resting_count = self.cli.group_start_uc.execute(
-                            self.cli.workout_id
+                            self.cli.workout_id,
+                            self.cli.group_nfc_tags
                         )
                         print(f"    ✓ Event {event_num}: Group start triggered at {time_str}")
-                        print(f"      Started: {started_count}, Active: {active_count}, Resting: {resting_count}")
+                        print(f"      Prepared: {started_count}, Active: {active_count}, Resting: {resting_count}")
                         self.cli.group_nfc_tags.clear()
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: Group start failed: {e}")
+                        return False, f"Group start failed: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: START event but no athletes in group or group start unavailable")
+                    return False, "START event but no athletes in group or group start unavailable"
             
             elif event_type == 'NFC':
                 # NFC scan to start interval
@@ -315,8 +339,10 @@ class EventCSVProcessor:
                         
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: NFC scan failed for {tag}: {e}")
+                        return False, f"NFC scan failed for {tag}: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: NFC scan use case not available")
+                    return False, "NFC scan use case not available"
             
             elif event_type == 'RFID':
                 # RFID detection (lap/interval completion)
@@ -325,7 +351,8 @@ class EventCSVProcessor:
                         status_view = self.cli.scan_rfid_uc.execute(
                             self.cli.workout_id,
                             tag,
-                            dt.isoformat()
+                            dt.isoformat(),
+                            use_event_time=True,
                         )
                         
                         # Find runner name for better display
@@ -346,11 +373,14 @@ class EventCSVProcessor:
                         
                     except Exception as e:
                         print(f"    ✗ Event {event_num}: RFID detection failed for {tag}: {e}")
+                        return False, f"RFID detection failed for {tag}: {e}"
                 else:
                     print(f"    ⚠ Event {event_num}: RFID scan use case not available")
+                    return False, "RFID scan use case not available"
             
             else:
                 print(f"    ⚠ Event {event_num}: Unknown event type: {event_type}")
+                return False, f"Unknown event type: {event_type}"
             
             return True, ""
             
@@ -372,6 +402,8 @@ class IntervalTrainingCLI:
     
     def __init__(self):
         """Initialize CLI with all dependencies."""
+        self.logger = logging.getLogger(__name__)
+
         # Initialize repository
         self.workout_repository = InMemoryWorkoutRepository()
         
@@ -389,6 +421,18 @@ class IntervalTrainingCLI:
         
         # Initialize use cases (with None checks)
         self._init_use_cases()
+
+        # Initialize worker scaffold for hardware event processing
+        self.rfid_runtime_config = RFIDRuntimeConfig()
+        self.rfid_worker_service: Optional[RFIDWorkerService] = None
+        self._init_rfid_worker_service()
+        self.hardware_rfid_adapter: Optional[ScannerAdapter] = None
+        self.hardware_nfc_adapter: Optional[ScannerAdapter] = None
+        self._rfid_signal_lock = threading.Lock()
+        self._rfid_signal_announced = False
+        self._rfid_reader_url: Optional[str] = None
+        self._init_optional_hardware_rfid_adapter()
+        self._init_optional_hardware_nfc_adapter()
         
         # Current workout state
         self.workout_id = self.DEFAULT_WORKOUT_ID
@@ -427,6 +471,157 @@ class IntervalTrainingCLI:
             'config': self.cmd_show_config,
             'runners': self.cmd_list_runners
         }
+
+    def _init_rfid_worker_service(self):
+        """Initialize the RFID worker service for asynchronous RFID processing."""
+        if not self.scan_rfid_uc and not self.scan_nfc_uc:
+            self.rfid_worker_service = None
+            return
+
+        self.rfid_worker_service = RFIDWorkerService(
+            config=self.rfid_runtime_config,
+            process_event_callback=self._process_rfid_worker_event,
+            overflow_event_callback=self._handle_queue_overflow,
+        )
+        self.rfid_worker_service.start()
+
+    def _init_optional_hardware_rfid_adapter(self):
+        """Optionally wire a real reader_hardware RFID adapter when configured."""
+        if not self.rfid_worker_service or create_rfid_rest_adapter is None:
+            return
+
+        scanner_url = os.getenv("FEATURE2_RFID_REST_URL")
+        if not scanner_url:
+            return
+
+        try:
+            adapter = create_rfid_rest_adapter(scanner_url)
+            adapter.set_event_callback(self._on_hardware_scanner_payload)
+            adapter.start()
+            self.hardware_rfid_adapter = adapter
+            self._rfid_reader_url = scanner_url
+            self.logger.info("reader_hardware RFID adapter started: %s", scanner_url)
+        except Exception as exc:
+            self.logger.error("Failed to initialize reader_hardware RFID adapter: %s", exc)
+
+    @staticmethod
+    def _env_true(name: str) -> bool:
+        value = os.getenv(name, "")
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _init_optional_hardware_nfc_adapter(self):
+        """Optionally wire a real reader_hardware NFC adapter when enabled by env."""
+        if not self.rfid_worker_service or create_nfc_adapter is None:
+            return
+
+        enabled = self._env_true("FEATURE2_ENABLE_NFC") or self._env_true("FEATURE2_NFC_ENABLED")
+        if not enabled:
+            return
+
+        try:
+            adapter = create_nfc_adapter()
+            adapter.set_event_callback(self._on_hardware_scanner_payload)
+            adapter.start()
+            self.hardware_nfc_adapter = adapter
+            self.logger.info("reader_hardware NFC adapter started")
+        except Exception as exc:
+            self.logger.error("Failed to initialize reader_hardware NFC adapter: %s", exc)
+
+    def _on_hardware_scanner_payload(self, payload: ScannerPayload) -> None:
+        """Receive normalized scanner payloads and enqueue them for worker processing."""
+        if not self.rfid_worker_service:
+            return
+
+        if payload.event_type == HardwareEventType.RFID.value:
+            with self._rfid_signal_lock:
+                if not self._rfid_signal_announced:
+                    endpoint = self._rfid_reader_url or os.getenv("FEATURE2_RFID_REST_URL", "unknown endpoint")
+                    print(f"\n  RFID link active: receiving scans from {endpoint} (sim_server communication OK)")
+                    self._rfid_signal_announced = True
+
+        envelope = build_event_envelope(
+            event_type=payload.event_type,
+            raw_tag=payload.tag_id,
+            raw_timestamp_ms=payload.timestamp_ms,
+            source=payload.source,
+            reader_id=payload.reader_id,
+            max_drift_ms=self.rfid_runtime_config.max_drift_ms,
+        )
+        self.rfid_worker_service.enqueue_event(envelope)
+
+    def _handle_queue_overflow(self, dropped_event):
+        """Emit queue overflow signal when oldest event is dropped."""
+        self.logger.warning(
+            "queue_overflow_dropped_event event_id=%s tag_id=%s source=%s",
+            dropped_event.event_id,
+            dropped_event.tag_id,
+            dropped_event.source,
+        )
+
+    def _process_rfid_worker_event(self, event):
+        """Worker callback: process one queued scanner event through the correct use case."""
+        event_iso = datetime.fromtimestamp(event.timestamp_ms / 1000.0).isoformat()
+
+        if event.event_type == HardwareEventType.RFID:
+            if not self.scan_rfid_uc:
+                raise RuntimeError("ScanRFIDUseCase unavailable")
+
+            try:
+                result = self.scan_rfid_uc.execute(
+                    self.workout_id,
+                    event.tag_id,
+                    event_iso,
+                    use_event_time=True,
+                )
+            except ValueError as exc:
+                # Hardware can emit scans before the workout is active; treat as ignored.
+                if "Workout is not active" in str(exc):
+                    return {
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "decision": RFIDDecision.IGNORED.value,
+                        "reason": "workout_not_active",
+                    }
+                raise
+
+            return {
+                "event_id": event.event_id,
+                "event_type": event.event_type.value,
+                "decision": getattr(result, "decision", None),
+                "reason": getattr(result, "reason", None),
+            }
+
+        if event.event_type == HardwareEventType.NFC:
+            if not self.scan_nfc_uc:
+                raise RuntimeError("ScanNFCUseCase unavailable")
+
+            status = self.scan_nfc_uc.execute(
+                self.workout_id,
+                event.tag_id,
+                event_iso,
+                use_event_time=True,
+            )
+            return {
+                "event_id": event.event_id,
+                "event_type": event.event_type.value,
+                "active_runner_count": getattr(status, "active_runner_count", None),
+                "resting_runner_count": getattr(status, "resting_runner_count", None),
+            }
+
+        raise RuntimeError(f"Unsupported hardware event type: {event.event_type}")
+
+    def _enqueue_rfid_event(self, rfid_tag: str, source: str = "cli") -> bool:
+        """Build and enqueue an RFID hardware envelope for asynchronous processing."""
+        if not self.rfid_worker_service:
+            return False
+
+        envelope = build_event_envelope(
+            event_type=HardwareEventType.RFID.value,
+            raw_tag=rfid_tag,
+            raw_timestamp_ms=int(datetime.now().timestamp() * 1000),
+            source=source,
+        )
+        return self.rfid_worker_service.enqueue_event(envelope)
     
     def _init_use_cases(self):
         """Initialize all use cases with dependencies (if available)."""
@@ -526,13 +721,13 @@ class IntervalTrainingCLI:
         
         while True:
             try:
-                command = input("\n❯ ").strip().lower()
+                raw_input = input("\n❯ ").strip()
                 
-                if not command:
+                if not raw_input:
                     continue
                 
-                parts = command.split()
-                cmd = parts[0]
+                parts = raw_input.split()
+                cmd = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
                 
                 if cmd in ['14', 'exit', 'quit', 'q']:
@@ -553,6 +748,13 @@ class IntervalTrainingCLI:
                 print(f"  Invalid input: {e}")
             except Exception as e:
                 print(f"  Unexpected error: {type(e).__name__}: {e}")
+        
+        if self.rfid_worker_service:
+            self.rfid_worker_service.stop()
+        if self.hardware_rfid_adapter:
+            self.hardware_rfid_adapter.stop()
+        if self.hardware_nfc_adapter:
+            self.hardware_nfc_adapter.stop()
     
     def _show_welcome(self):
         """Display welcome message."""
@@ -872,14 +1074,15 @@ class IntervalTrainingCLI:
             if self.group_start_uc:
                 # Use the GroupStartUseCase
                 started_count, active_count, resting_count = self.group_start_uc.execute(
-                    self.workout_id
+                    self.workout_id,
+                    self.group_nfc_tags
                 )
                 print(f"\n  ✓ Group start completed (via use case)")
             else:
                 # Fallback simulation
                 print(f"\n  ⚠ GroupStartUseCase not available - simulating group start")
                 
-                # Manually start each runner in the group
+                # Manually prepare each runner in the group (activate-only semantics)
                 workout = self.workout_repository.get_by_id(self.workout_id)
                 if not workout:
                     print("  Error: Workout not found")
@@ -894,17 +1097,22 @@ class IntervalTrainingCLI:
                     runner_session = self._find_runner_by_nfc(nfc_tag)
                     if runner_session:
                         try:
-                            runner_session.start_interval()
-                            started_count += 1
-                            print(f"    ✓ Started {runner_session.runner.name}")
+                            if runner_session.state.value == "NOT_STARTED":
+                                runner_session.mark_ready()
+                                started_count += 1
+                                print(f"    ✓ Prepared {runner_session.runner.name}")
+                            elif runner_session.state.value == "READY":
+                                print(f"    - {runner_session.runner.name} already prepared")
+                            else:
+                                print(f"    - {runner_session.runner.name} not prepare-eligible ({runner_session.state.value})")
                         except Exception as e:
-                            print(f"    ✗ Could not start {runner_session.runner.name}: {e}")
+                            print(f"    ✗ Could not prepare {runner_session.runner.name}: {e}")
                 
                 self.workout_repository.save(workout)
                 active_count, resting_count = workout.get_runner_counts()
             
             self.group_nfc_tags.clear()
-            print(f"\n    Started: {started_count} athletes")
+            print(f"\n    Prepared: {started_count} athletes")
             print(f"    Now active: {active_count}")
             print(f"    Now resting: {resting_count}")
             
@@ -923,20 +1131,19 @@ class IntervalTrainingCLI:
         timestamp = self._get_timestamp()
         
         try:
-            if self.scan_rfid_uc:
-                status_view = self.scan_rfid_uc.execute(
-                    self.workout_id,
-                    rfid_tag,
-                    timestamp
-                )
-                
+            if self.scan_rfid_uc and self.rfid_worker_service:
+                queued = self._enqueue_rfid_event(rfid_tag, source="cli-sim")
+                if not queued:
+                    print("\n  ✗ RFID event rejected (worker unavailable or queue error)")
+                    return
+
                 # Find runner name
                 runner_session = self._find_runner_by_rfid(rfid_tag)
                 runner_name = runner_session.runner.name if runner_session else rfid_tag
-                
-                print(f"\n  ✓ RFID: {runner_name} detected at {timestamp}")
-                print(f"    Active: {status_view.active_runner_count}")
-                print(f"    Resting: {status_view.resting_runner_count}")
+
+                print(f"\n  ✓ RFID: {runner_name} queued at {timestamp}")
+                if self.rfid_worker_service:
+                    print(f"    Queue depth: {self.rfid_worker_service.get_queue_depth()}")
             else:
                 print(f"\n  ⚠ ScanRFIDUseCase not available")
             
@@ -1130,6 +1337,12 @@ class IntervalTrainingCLI:
     
     def cmd_exit(self, args: List[str]):
         """Exit the application."""
+        if self.hardware_rfid_adapter:
+            self.hardware_rfid_adapter.stop()
+        if self.hardware_nfc_adapter:
+            self.hardware_nfc_adapter.stop()
+        if self.rfid_worker_service:
+            self.rfid_worker_service.stop()
         print("\n  " + "=" * 56)
         print("  Thank you for using the Interval Workout Management Tool!")
         print("  " + "=" * 56 + "\n")
@@ -1208,6 +1421,15 @@ class IntervalTrainingCLI:
             print(f"  Active:        {status_view.active_runner_count}")
             print(f"  Resting:       {status_view.resting_runner_count}")
             print(f"  Not Started:   {not_started}")
+            if self.rfid_worker_service:
+                worker_status = self.rfid_worker_service.get_health_status()
+                print(f"  Worker Alive:  {worker_status.is_alive}")
+                print(f"  Queue Depth:   {self.rfid_worker_service.get_queue_depth()}")
+                print(f"  Processed:     {worker_status.events_processed}")
+                print(f"  Dropped:       {worker_status.events_dropped}")
+                print(f"  Queue Util %:  {worker_status.queue_utilization_percent:.1f}")
+                print(f"  Drops/Minute:  {worker_status.queue_drops_per_minute:.2f}")
+                print(f"  Avg Latency:   {worker_status.processing_latency_ms:.2f} ms")
             print("  " + "=" * 56)
             
         except Exception as e:

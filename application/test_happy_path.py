@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from domain.runner import Runner
 from domain.runnerSession import RunnerSession
 from domain.workout import Workout
@@ -12,6 +14,8 @@ from application.use_cases.end_workout import EndWorkoutUseCase
 # This test simulates a happy path scenario for an interval workout. It creates a workout with two runners, starts the workout, simulates NFC and RFID scans for one runner, checks the rest screen data, ends the workout, and verifies that the workout status is updated to COMPLETED. Assertions are used throughout to ensure that the expected outcomes are met at each step.
 
 def test_happy_path_interval_workout() -> None:
+    base_time = datetime.now().replace(microsecond=0)
+
     runner1 = Runner(
         runner_id=1,
         name="Alice",
@@ -49,23 +53,43 @@ def test_happy_path_interval_workout() -> None:
     assert started == True
     
     scan_nfc_use_case = ScanNFCUseCase(repository)
-    status1 = scan_nfc_use_case.execute(100, "NFC001", "2026-02-08T10:00:00")
+    status1 = scan_nfc_use_case.execute(100, "NFC001", base_time.isoformat())
     assert status1.workout_id == 100
     assert status1.workout_state == WorkoutState.ACTIVE.value
     assert status1.active_runner_count == 1
     assert status1.resting_runner_count == 0
     
     scan_rfid_use_case = ScanRFIDUseCase(repository)
-    status2 = scan_rfid_use_case.execute(100, "RFID001", "2026-02-08T10:00:05")
+    status2 = scan_rfid_use_case.execute(
+        100,
+        "RFID001",
+        (base_time + timedelta(seconds=5)).isoformat(),
+        use_event_time=True,
+    )
     assert status2.workout_id == 100
     
-    status3 = scan_rfid_use_case.execute(100, "RFID001", "2026-02-08T10:00:10")
+    status3 = scan_rfid_use_case.execute(
+        100,
+        "RFID001",
+        (base_time + timedelta(seconds=10)).isoformat(),
+        use_event_time=True,
+    )
     assert status3.workout_id == 100
     
-    status4 = scan_rfid_use_case.execute(100, "RFID001", "2026-02-08T10:00:15")
+    status4 = scan_rfid_use_case.execute(
+        100,
+        "RFID001",
+        (base_time + timedelta(seconds=15)).isoformat(),
+        use_event_time=True,
+    )
     assert status4.workout_id == 100
     
-    status5 = scan_rfid_use_case.execute(100, "RFID001", "2026-02-08T10:00:20")
+    status5 = scan_rfid_use_case.execute(
+        100,
+        "RFID001",
+        (base_time + timedelta(seconds=20)).isoformat(),
+        use_event_time=True,
+    )
     assert status5.active_runner_count == 0
     assert status5.resting_runner_count == 1
     
