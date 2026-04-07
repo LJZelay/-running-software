@@ -123,9 +123,34 @@ def test_save_and_load_empty_roster(tmp_path):
     Saving an emprty roster shoudl still make a valid file.
     Loading that file back should return an empty list, not crash.
     """
-    
+
     file_path = tmp_path / "last_roster.csv"
     save_last_roster([], file_path)
     assert last_roster_exists(file_path) is True
     loaded_runners = load_last_roster(file_path)
     assert loaded_runners == []
+
+def test_load_last_roster_preserves_runner_order(tmp_path:Path):
+    file_path = tmp_path / "last_roster.csv"
+
+    original_runners = [
+        _make_runner(1, "Alice", "alice@example.com", "NFC001", "RFID001"),
+        _make_runner(2, "Bob", "bob@example.com", "NFC002", "RFID002"),
+        _make_runner(3, "Charlie", "charlie@example.com", "NFC003", "RFID003"),
+    ]
+
+    save_last_roster(original_runners, file_path)
+    loaded_runners = load_last_roster(file_path)
+
+    assert [runner.name for runner in loaded_runners] == ["Alice", "Bob", "Charlie"]
+
+def test_save_last_roster_creates_missing_parent_directory(tmp_path: Path):
+    file_path = tmp_path / "nested" / "folder" / "last_roster.csv"
+
+    runners = [_make_runner(1, "Alice", "alice@example.com", "NFC001", "RFID001")]
+
+    save_last_roster(runners, file_path)
+    assert file_path.exists() is True
+    loaded_runners = load_last_roster(file_path)
+    assert len(loaded_runners) == 1
+    assert loaded_runners[0].name == "Alice"
