@@ -40,7 +40,7 @@ class NFCReader:
     def stop(self):
         self.running = False
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=2.0)
 
     def _run(self):
         CardMonitor, CardObserver, CardConnectionException, NoCardException, _, toHexString = _load_smartcard_modules()

@@ -121,7 +121,9 @@ class RFIDWorkerService:
         self._worker_thread = threading.Thread(
             target=self._worker_run,
             name="RFIDWorker",
-            daemon=False
+            # Keep explicit stop() semantics, but do not block interpreter exit
+            # if a test or caller misses teardown.
+            daemon=True
         )
         self._worker_thread.start()
         logger.info("RFIDWorkerService started (worker thread running)")
