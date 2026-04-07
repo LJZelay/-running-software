@@ -43,7 +43,7 @@ class GetRunnerAnalyticsUseCase:
                 # Pace = duration per distance (convert to seconds per km)
                 duration_sec = duration_ms / 1000.0
                 distance_km = interval_distance / 1000.0
-                pace_per_km = duration_sec / distance_km if distance_km > 0 else 0.0
+                pace_per_km = duration_sec / distance_km if distance_km > 0 else None
 
                 # Split times (laps)
                 laps = interval.get("laps", [])
@@ -72,10 +72,13 @@ class GetRunnerAnalyticsUseCase:
 
             # Overall average pace (weighted by duration)
             if intervals_detail:
-                total_pace = sum(i.pace_per_km for i in intervals_detail)
-                overall_avg_pace = total_pace / len(intervals_detail)
+                valid_paces = [i.pace_per_km for i in intervals_detail if i.pace_per_km is not None]
+                if valid_paces:
+                    overall_avg_pace = sum(valid_paces) / len(valid_paces)
+                else:
+                    overall_avg_pace = None
             else:
-                overall_avg_pace = 0.0
+                overall_avg_pace = None
 
             # Rest efficiency (optional)
             rest_efficiency = None

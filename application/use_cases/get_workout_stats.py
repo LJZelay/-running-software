@@ -24,6 +24,8 @@ class GetWorkoutStatsUseCase:
         # intervals_completed: interval number -> count of runners who completed it
         intervals_completed: Dict[int, int] = {}
         average_pace_per_interval: Dict[int, float] = {}
+        pace_sums: Dict[int, float] = {}
+        pace_counts: Dict[int, int] = {}
 
         runner_analytics = self.analytics_use_case.execute(workout_id)
         for ra in runner_analytics:
@@ -31,15 +33,9 @@ class GetWorkoutStatsUseCase:
                 num = interval.interval_number
                 intervals_completed[num] = intervals_completed.get(num, 0) + 1
                 # accumulate pace for average later
-                # We'll compute after we have all paces
-        # For average pace per interval, we need sum of paces per interval
-        pace_sums: Dict[int, float] = {}
-        pace_counts: Dict[int, int] = {}
-        for ra in runner_analytics:
-            for interval in ra.intervals:
-                num = interval.interval_number
-                pace_sums[num] = pace_sums.get(num, 0.0) + interval.pace_per_km
-                pace_counts[num] = pace_counts.get(num, 0) + 1
+                if interval.pace_per_km is not None:
+                    pace_sums[num] = pace_sums.get(num, 0.0) + interval.pace_per_km
+                    pace_counts[num] = pace_counts.get(num, 0) + 1
         for num in pace_sums:
             average_pace_per_interval[num] = pace_sums[num] / pace_counts[num]
 

@@ -14,14 +14,14 @@ def test_workout_stats_aggregates_correctly():
     runner1 = Runner(1, "Alice", "a@a.com", "NFC1", "RFID1")
     s1 = RunnerSession(runner1, restDuration=60)
     s1.intervals = [
-        {"intervalNumber": 1, "start": "T00", "end": "T01", "laps": []},
-        {"intervalNumber": 2, "start": "T02", "end": "T03", "laps": []}
+        {"intervalNumber": 1, "start": "2025-01-01T10:00:00", "end": "2025-01-01T10:01:00", "laps": []},
+        {"intervalNumber": 2, "start": "2025-01-01T10:02:00", "end": "2025-01-01T10:03:00", "laps": []}
     ]
     # Runner2 completes 1 interval
     runner2 = Runner(2, "Bob", "b@b.com", "NFC2", "RFID2")
     s2 = RunnerSession(runner2, restDuration=60)
     s2.intervals = [
-        {"intervalNumber": 1, "start": "T00", "end": "T01", "laps": []}
+        {"intervalNumber": 1, "start": "2025-01-01T10:00:00", "end": "2025-01-01T10:01:00", "laps": []}
     ]
     workout.add_runner_session(s1)
     workout.add_runner_session(s2)

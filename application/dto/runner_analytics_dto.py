@@ -9,7 +9,7 @@ class IntervalDetail:
     start: str          # ISO timestamp
     end: str
     duration_ms: int    # in milliseconds
-    pace_per_km: float  # seconds per kilometer (or per configured unit)
+    pace_per_km: Optional[float]  # seconds per kilometer (or per configured unit)
     splits_ms: List[int]  # split times in milliseconds (between consecutive laps)
 
 
@@ -19,5 +19,5 @@ class RunnerAnalyticsDTO:
     runner_id: int
     runner_name: str
     intervals: List[IntervalDetail]
-    overall_avg_pace: float   # seconds per kilometer across all intervals
+    overall_avg_pace: Optional[float]   # seconds per kilometer across all intervals
     rest_efficiency: Optional[float] = None  # (actual_rest_total / configured_rest_total) if rests recorded
