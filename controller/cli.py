@@ -235,13 +235,11 @@ class EventCSVProcessor:
                 
                 for row_num, row in enumerate(reader, start=2):
                     try:
-                        raw_type = row.get('TYPE')
-                        raw_timestamp = row.get('TIMESTAMP')
-                        raw_tag = row.get('TAG') if 'TAG' in row else ''
-
-                        event_type = (raw_type or '').strip().upper()
-                        timestamp = (raw_timestamp or '').strip()
-                        tag = (raw_tag or '').strip()
+                        # DictReader can emit None for missing trailing CSV fields.
+                        # Normalize all values to safe strings before .strip().
+                        event_type = str(row.get('TYPE') or '').strip().upper()
+                        timestamp = str(row.get('TIMESTAMP') or '').strip()
+                        tag = str(row.get('TAG') or '').strip()
                         
                         # Validate
                         if not event_type:
