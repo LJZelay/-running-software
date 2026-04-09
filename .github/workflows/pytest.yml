@@ -17,6 +17,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
@@ -34,13 +35,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-html pytest-cov
+        pip install pytest pytest-html pytest-cov pytest-timeout
         # Install your project dependencies
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
     - name: Run tests with pytest
       run: |
         pytest \
+          --timeout=180 \
+          --timeout-method=thread \
           --html=test-report.html \
           --self-contained-html \
           --cov=. \
