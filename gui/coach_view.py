@@ -19,7 +19,6 @@ from externalInterface.csv_workout_config_parser import CSVWorkoutConfigParser
 from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter, create_nfc_adapter
 from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
 from application.last_roster_service import LastRosterService
-from externalInterface.runner_pdf_report_service import RunnerPdfReportService
 from gui.analytics_widgets import (
     plot_pace_trend,
     plot_split_distribution,
@@ -49,6 +48,7 @@ class CoachView(tk.Frame):
         add_runner_uc=None,
         nfc_uc=None,
         rfid_uc=None,
+        generate_report_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -64,6 +64,7 @@ class CoachView(tk.Frame):
         self.add_runner_uc = add_runner_uc
         self.nfc_uc = nfc_uc
         self.rfid_uc = rfid_uc
+        self.generate_report_uc = generate_report_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.chart_modes = ["pace", "split", "run_vs_rest", "rest_efficiency", "avg_pace", "progress"]
@@ -76,7 +77,6 @@ class CoachView(tk.Frame):
         self.nfc_adapter: Optional[ScannerAdapter] = None
         self.scanning_active = False
         self.last_roster_service = LastRosterService()
-        self.pdf_report_service = RunnerPdfReportService()
         self.scan_button = None  # Will be set when button is created
 
         ModernTheme.configure(parent)
@@ -859,6 +859,10 @@ class CoachView(tk.Frame):
     def _on_generate_pdf_reports(self):
         """Generate PDF reports for all runners in the workout."""
         try:
+            if not self.generate_report_uc:
+                messagebox.showerror("Error", "Report generation is not configured")
+                return
+
             if not self.repo:
                 messagebox.showerror("Error", "Repository not available")
                 return
@@ -875,7 +879,7 @@ class CoachView(tk.Frame):
                 if not result:
                     return
 
-            generated_files = self.pdf_report_service.generate_reports_for_workout(workout)
+            generated_files = self.generate_report_uc.execute(workout)
             
             if generated_files:
                 messagebox.showinfo("Success", 
