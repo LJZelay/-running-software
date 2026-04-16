@@ -870,7 +870,7 @@ class CoachView(tk.Frame):
         """Initialize and start hardware scanning."""
         try:
             # Initialize RFID adapter (you may need to configure the scanner address)
-            rfid_scanner_address = "localhost:5084"  # Default Impinj REST endpoint
+            rfid_scanner_address = "169.254.1.1:80"  # RFID reader address
             self.rfid_adapter = create_rfid_rest_adapter(rfid_scanner_address)
             
             # Initialize NFC adapter
