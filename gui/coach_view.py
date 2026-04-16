@@ -14,8 +14,6 @@ from application.dto.workout_stats_dto import WorkoutStatsDTO
 from domain.workout import Workout
 from domain.runnerState import RunnerState
 from domain.workoutState import WorkoutState
-from externalInterface.csv_roster_parser import CSVRosterParser, CSVInputError
-from externalInterface.csv_workout_config_parser import CSVWorkoutConfigParser
 from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter, create_nfc_adapter
 from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
 from application.last_roster_service import LastRosterService
@@ -49,6 +47,8 @@ class CoachView(tk.Frame):
         nfc_uc=None,
         rfid_uc=None,
         generate_report_uc=None,
+        load_workout_config_uc=None,
+        load_roster_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -65,6 +65,8 @@ class CoachView(tk.Frame):
         self.nfc_uc = nfc_uc
         self.rfid_uc = rfid_uc
         self.generate_report_uc = generate_report_uc
+        self.load_workout_config_uc = load_workout_config_uc
+        self.load_roster_uc = load_roster_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.chart_modes = ["pace", "split", "run_vs_rest", "rest_efficiency", "avg_pace", "progress"]
@@ -392,10 +394,10 @@ class CoachView(tk.Frame):
             return
 
         try:
-            parser = CSVWorkoutConfigParser()
-            config = parser.parse_csv_file(file_path)
+            # Use the application layer use case instead of direct external interface call
+            config = self.load_workout_config_uc.execute(self.workout_id, file_path)
 
-            target_workout_id = config.workout_id or self.workout_id
+            target_workout_id = config['workout_id']
             workout = self.repo.get_by_id(target_workout_id) if self.repo else None
 
             if workout and workout.status != WorkoutState.NOT_STARTED:
@@ -408,14 +410,14 @@ class CoachView(tk.Frame):
             if not workout:
                 workout = Workout(
                     workout_id=target_workout_id,
-                    intervalDistance=config.interval_distance,
-                    lapsPerInterval=config.laps_per_interval,
-                    startMode=config.start_mode
+                    intervalDistance=config['interval_distance'],
+                    lapsPerInterval=config['laps_per_interval'],
+                    startMode=config['start_mode']
                 )
             else:
-                workout.intervalDistance = config.interval_distance
-                workout.lapsPerInterval = config.laps_per_interval
-                workout.startMode = config.start_mode
+                workout.intervalDistance = config['interval_distance']
+                workout.lapsPerInterval = config['laps_per_interval']
+                workout.startMode = config['start_mode']
 
             workout.status = WorkoutState.NOT_STARTED
             self.repo.save(workout)
@@ -434,10 +436,9 @@ class CoachView(tk.Frame):
                 f"Loaded {workout.intervalDistance}m x{workout.lapsPerInterval}",
                 ModernTheme.SUCCESS
             )
-        except CSVInputError as e:
-            messagebox.showerror("Workout Parse Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load workout: {str(e)}")
+            self._update_status_badge("Load Failed", ModernTheme.DANGER)
 
     def _on_open_selected_runner(self):
         runner_id = self._get_selected_runner_id()
@@ -571,47 +572,10 @@ class CoachView(tk.Frame):
             return
         
         try:
-            parser = CSVRosterParser()
-            roster_data = parser.parse_csv_file(file_path)
-            
-            # Validate unique tags
-            is_valid, errors = parser.validate_unique_tags(roster_data)
-            if not is_valid:
-                messagebox.showerror("CSV Error", f"Duplicate tags found:\n" + "\n".join(errors[:5]))
-                return
-            
-            # Get or create workout
-            if not self.repo:
-                messagebox.showerror("Error", "Repository not available")
-                return
+            # Use the application layer use case instead of direct external interface calls
+            added_runners = self.load_roster_uc.execute(self.workout_id, file_path)
             
             workout = self.repo.get_by_id(self.workout_id)
-            if not workout:
-                from domain.workout import Workout
-                workout = Workout(workout_id=self.workout_id, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
-                self.repo.save(workout)
-            else:
-                # Clear existing runners
-                workout.runnerSessions.clear()
-            
-            # Add runners to workout
-            from domain.runner import Runner
-            from domain.runnerSession import RunnerSession
-            
-            runner_id = 1
-            for athlete in roster_data:
-                runner = Runner(
-                    runner_id=runner_id,
-                    name=athlete.name,
-                    email=athlete.email,
-                    nfc_tag=athlete.nfc_id,
-                    rfid_tag=athlete.rfid_id
-                )
-                runner_session = RunnerSession(runner=runner, restDuration=60)
-                workout.add_runner_session(runner_session)
-                runner_id += 1
-            
-            self.repo.save(workout)
             self.workout_active = workout.status == WorkoutState.ACTIVE
             self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
             self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
@@ -622,13 +586,12 @@ class CoachView(tk.Frame):
 
             # Refresh UI and show success message
             self._poll()
-            messagebox.showinfo("Success", f"Loaded {len(roster_data)} athletes")
-            self._update_status_badge(f"✓ {len(roster_data)} runners", ModernTheme.SUCCESS)
+            messagebox.showinfo("Success", f"Loaded {len(added_runners)} athletes")
+            self._update_status_badge(f"✓ {len(added_runners)} runners", ModernTheme.SUCCESS)
             
-        except CSVInputError as e:
-            messagebox.showerror("CSV Parse Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load roster: {str(e)}")
+            self._update_status_badge("Load Failed", ModernTheme.DANGER)
 
     def _on_toggle_chart(self):
         # Legacy method - now handled by combobox
