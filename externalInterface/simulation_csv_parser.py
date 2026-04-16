@@ -163,3 +163,66 @@ def parse_commands_csv(file_path: str) -> List[ParsedCommand]:
             raise SimulationCSVError(f"Unknown command type: {first_cell}")
 
     return commands
+
+
+@dataclass(frozen=True)
+class ParsedEvents:
+    """Parsed events from events.csv with inferred workout configuration."""
+    runners: List[str]  # Runner NFC tags from GROUP commands
+    events: List[ParsedCommand]  # All commands in order
+    implicit_intervals: int  # Inferred number of intervals from event pattern
+    implicit_laps: int  # Inferred laps per interval
+
+
+def parse_events_csv(file_path: str) -> ParsedEvents:
+    """
+    Parse events.csv file which contains GROUP, START, NFC, and RFID events.
+    Infers workout configuration from the event pattern.
+    
+    Returns:
+        ParsedEvents with runners, events, and inferred workout parameters
+    """
+    commands = parse_commands_csv(file_path)
+    
+    # Extract runners from GROUP commands
+    runners: List[str] = []
+    for cmd in commands:
+        if cmd.command_type == "GROUP" and cmd.nfc_tags:
+            runners.extend(cmd.nfc_tags)
+    
+    if not runners:
+        raise SimulationCSVError("No GROUP commands found in events.csv - cannot determine runners")
+    
+    # Infer intervals and laps by analyzing event pattern
+    # Count distinct scan cycles (each runner scans once per lap)
+    runner_set = set(runners)
+    nfc_events = [cmd for cmd in commands if cmd.command_type == "NFC"]
+    
+    interval_count = 1 if nfc_events else 1
+    if nfc_events:
+        # Group NFC events into intervals by finding gaps in timestamps
+        intervals = []
+        current_interval = []
+        prev_timestamp = None
+        
+        for event in nfc_events:
+            if prev_timestamp and (event.timestamp_ms - prev_timestamp) > 200000:  # 200s gap = new interval
+                intervals.append(current_interval)
+                current_interval = []
+            current_interval.append(event)
+            prev_timestamp = event.timestamp_ms
+        
+        if current_interval:
+            intervals.append(current_interval)
+        
+        interval_count = len(intervals)
+        implicit_laps = max(1, max([sum(1 for e in interval if e.nfc_tag) for interval in intervals]))
+    else:
+        implicit_laps = 1
+    
+    return ParsedEvents(
+        runners=runners,
+        events=commands,
+        implicit_intervals=max(1, interval_count),
+        implicit_laps=max(1, implicit_laps)
+    )
