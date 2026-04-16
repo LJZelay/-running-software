@@ -21,6 +21,10 @@ from application.use_cases.scan_nfc import ScanNFCUseCase
 from application.use_cases.scan_rfid import ScanRFIDUseCase
 from application.use_cases.group_start import GroupStartUseCase
 from application.use_cases.add_runner_to_workout import AddRunnerToWorkoutUseCase
+from application.use_cases.generate_runner_report import GenerateRunnerReportUseCase
+from application.use_cases.load_workout_config import LoadWorkoutConfigUseCase
+from application.use_cases.load_roster import LoadRosterUseCase
+from externalInterface.runner_pdf_report_service import RunnerPdfReportService
 from gui.coach_view import CoachView
 from gui.runner_view import RunnerView
 
@@ -56,6 +60,10 @@ def main():
     rfid_uc = ScanRFIDUseCase(repo)
     group_start_uc = GroupStartUseCase(repo)
     add_runner_uc = AddRunnerToWorkoutUseCase(repo)
+    pdf_service = RunnerPdfReportService()
+    generate_report_uc = GenerateRunnerReportUseCase(pdf_service)
+    load_workout_config_uc = LoadWorkoutConfigUseCase(repo)
+    load_roster_uc = LoadRosterUseCase(repo)
 
     # Launch GUI windows
     root = tk.Tk()
@@ -72,6 +80,9 @@ def main():
         add_runner_uc=add_runner_uc,
         nfc_uc=nfc_uc,
         rfid_uc=rfid_uc,
+        generate_report_uc=generate_report_uc,
+        load_workout_config_uc=load_workout_config_uc,
+        load_roster_uc=load_roster_uc,
         refresh_interval_ms=1000
     )
     coach.pack(fill=tk.BOTH, expand=True)

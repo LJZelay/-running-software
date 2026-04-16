@@ -2,9 +2,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import csv
+import threading
 
 from application.dto.runner_rest_view import RunnerRestView
 from application.dto.runner_running_view import RunnerRunningView
@@ -13,8 +14,9 @@ from application.dto.workout_stats_dto import WorkoutStatsDTO
 from domain.workout import Workout
 from domain.runnerState import RunnerState
 from domain.workoutState import WorkoutState
-from externalInterface.csv_roster_parser import CSVRosterParser, CSVInputError
-from externalInterface.csv_workout_config_parser import CSVWorkoutConfigParser
+from externalInterface.reader_hardware_adapter import create_rfid_rest_adapter, create_nfc_adapter
+from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
+from application.last_roster_service import LastRosterService
 from gui.analytics_widgets import (
     plot_pace_trend,
     plot_split_distribution,
@@ -44,6 +46,9 @@ class CoachView(tk.Frame):
         add_runner_uc=None,
         nfc_uc=None,
         rfid_uc=None,
+        generate_report_uc=None,
+        load_workout_config_uc=None,
+        load_roster_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -59,6 +64,9 @@ class CoachView(tk.Frame):
         self.add_runner_uc = add_runner_uc
         self.nfc_uc = nfc_uc
         self.rfid_uc = rfid_uc
+        self.generate_report_uc = generate_report_uc
+        self.load_workout_config_uc = load_workout_config_uc
+        self.load_roster_uc = load_roster_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.chart_modes = ["pace", "split", "run_vs_rest", "rest_efficiency", "avg_pace", "progress"]
@@ -66,14 +74,25 @@ class CoachView(tk.Frame):
         self.workout_active = False
         self.runner_windows = []
 
+        # Initialize hardware adapters and services
+        self.rfid_adapter: Optional[ScannerAdapter] = None
+        self.nfc_adapter: Optional[ScannerAdapter] = None
+        self.scanning_active = False
+        self.last_roster_service = LastRosterService()
+        self.scan_button = None  # Will be set when button is created
+
         ModernTheme.configure(parent)
         self._setup_ui()
         self._start_polling()
+        
+        # Bind cleanup on window destroy
+        self.parent.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
     def _setup_ui(self):
         """Create the UI widgets."""
-        self.parent.title("Coach Dashboard - Interval Workout Manager")
-        self.parent.geometry("1200x800")
+        self.parent.title("Interval Training Management - Coach Dashboard")
+        self.parent.geometry("1400x900")  # Increased size for better layout
+        self.parent.minsize(1200, 700)   # Minimum size to prevent cramped layout
 
         toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(16, 12))
         toolbar.pack(fill=tk.X, side=tk.TOP)
@@ -102,28 +121,58 @@ class CoachView(tk.Frame):
         action_frame = ttk.Frame(self, style="GlassHighlight.TFrame")
         action_frame.pack(fill=tk.X, pady=(8, 16))
 
-        # Primary actions (Start/End workout)
-        self.btn_start = ttk.Button(action_frame, text="▶ Start Workout",
+        # Primary actions (Start/End workout) - Top row
+        primary_frame = ttk.Frame(action_frame, style="GlassHighlight.TFrame")
+        primary_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        self.btn_start = ttk.Button(primary_frame, text="▶ Start Workout",
                                    command=self._on_start_workout, style="Success.TButton")
-        self.btn_start.pack(side=tk.LEFT, padx=(0, 12), pady=8)
+        self.btn_start.pack(side=tk.LEFT, padx=(0, 12), pady=4)
 
-        self.btn_end = ttk.Button(action_frame, text="⏹ End Workout",
+        self.btn_end = ttk.Button(primary_frame, text="⏹ End Workout",
                                  command=self._on_end_workout, style="Danger.TButton", state=tk.DISABLED)
-        self.btn_end.pack(side=tk.LEFT, padx=(0, 24), pady=8)
+        self.btn_end.pack(side=tk.LEFT, padx=(0, 24), pady=4)
 
+        # Secondary actions - Second row with better organization
+        secondary_frame = ttk.Frame(action_frame, style="GlassHighlight.TFrame")
+        secondary_frame.pack(fill=tk.X, pady=(0, 8))
 
-        # Secondary actions with subtle styling
-        ttk.Button(action_frame, text="📂 Load Roster",
+        # Roster management buttons
+        ttk.Button(secondary_frame, text="📂 Load Roster",
                   command=self._on_load_roster, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(action_frame, text="⚙ Load Workout",
+        ttk.Button(secondary_frame, text="💾 Save Roster",
+                  command=self._on_save_last_roster, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(secondary_frame, text="📤 Load Last Roster",
+                  command=self._on_load_last_roster, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        
+        # Separator
+        ttk.Separator(secondary_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
+        
+        # Workout and scanning buttons
+        ttk.Button(secondary_frame, text="⚙ Load Workout",
                   command=self._on_load_workout, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(action_frame, text="🔄 Refresh",
+        self.scan_button = ttk.Button(secondary_frame, text="📡 Start Scanning",
+                  command=self._on_toggle_scanning, style="Secondary.TButton")
+        self.scan_button.pack(side=tk.LEFT, padx=(0, 8))
+        
+        # Separator
+        ttk.Separator(secondary_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
+        
+        # Utility buttons
+        ttk.Button(secondary_frame, text="🔄 Refresh",
                   command=self._on_refresh, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(action_frame, text="👤 Runner Details",
+        ttk.Button(secondary_frame, text="👤 Runner Details",
                   command=self._on_open_selected_runner, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(action_frame, text="📊 Charts",
+        ttk.Button(secondary_frame, text="📊 Charts",
                   command=self._on_toggle_chart, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(action_frame, text="💾 Export",
+        
+        # Separator
+        ttk.Separator(secondary_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
+        
+        # Export buttons
+        ttk.Button(secondary_frame, text="📄 PDF Reports",
+                  command=self._on_generate_pdf_reports, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(secondary_frame, text="💾 Export CSV",
                   command=self._on_export, style="Secondary.TButton").pack(side=tk.LEFT)
 
         # Coaching tip for better workflow
@@ -138,40 +187,93 @@ class CoachView(tk.Frame):
         # Live Status Tab with glass-style cards
         self.live_frame = ttk.Frame(self, style="Glass.TFrame")
         self.live_frame.configure(padding=(20, 16))
-        self.notebook.add(self.live_frame, text="Live Status", padding=8)
+        self.notebook.add(self.live_frame, text="🏃 Live Status", padding=8)
 
         # Live Status Tab content with proper spacing
-        ttk.Label(self.live_frame, text="🏃 Running Athletes", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 12))
-        self.running_tree = ttk.Treeview(self.live_frame, columns=("name", "int", "laps", "prog"), height=8, show="headings")
+        # Running athletes section
+        running_section = ttk.LabelFrame(self.live_frame, text="🏃 Running Athletes", style="Card.TLabelframe")
+        running_section.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        
+        running_container = ttk.Frame(running_section, style="Card.TFrame")
+        running_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.running_tree = ttk.Treeview(running_container, columns=("name", "int", "laps", "prog", "pace"), height=10, show="headings", style="Treeview")
         self.running_tree.heading("name", text="Name")
         self.running_tree.heading("int", text="Interval")
         self.running_tree.heading("laps", text="Laps")
         self.running_tree.heading("prog", text="Progress")
-        self.running_tree.column("name", width=180)
-        self.running_tree.column("int", width=80)
-        self.running_tree.column("laps", width=80)
-        self.running_tree.column("prog", width=180)
-        self.running_tree.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        self.running_tree.heading("pace", text="Avg Pace")
+        self.running_tree.column("name", width=200, minwidth=150)
+        self.running_tree.column("int", width=80, minwidth=60)
+        self.running_tree.column("laps", width=80, minwidth=60)
+        self.running_tree.column("prog", width=120, minwidth=100)
+        self.running_tree.column("pace", width=100, minwidth=80)
+        
+        # Add scrollbar for running tree
+        running_scrollbar = ttk.Scrollbar(running_container, orient=tk.VERTICAL, command=self.running_tree.yview)
+        self.running_tree.configure(yscrollcommand=running_scrollbar.set)
+        
+        self.running_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        running_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
         self.running_tree.bind("<Double-1>", self._on_running_row_double_click)
 
-        ttk.Label(self.live_frame, text="Tip: Double-click a runner to open their dashboard.", style="Tip.TLabel").pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(self.live_frame, text="😴 Resting Athletes", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 12))
-        self.resting_tree = ttk.Treeview(self.live_frame, columns=("name", "time", "rdy"), height=6, show="headings")
+        # Resting athletes section
+        resting_section = ttk.LabelFrame(self.live_frame, text="😴 Resting Athletes", style="Card.TLabelframe")
+        resting_section.pack(fill=tk.BOTH, expand=True)
+        
+        resting_container = ttk.Frame(resting_section, style="Card.TFrame")
+        resting_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.resting_tree = ttk.Treeview(resting_container, columns=("name", "time", "rdy", "next"), height=8, show="headings", style="Treeview")
         self.resting_tree.heading("name", text="Name")
         self.resting_tree.heading("time", text="Time Left")
-        self.resting_tree.heading("rdy", text="Ready")
-        self.resting_tree.column("name", width=180)
-        self.resting_tree.column("time", width=120)
-        self.resting_tree.column("rdy", width=100)
-        self.resting_tree.pack(fill=tk.BOTH, expand=True)
+        self.resting_tree.heading("rdy", text="Status")
+        self.resting_tree.heading("next", text="Next Action")
+        self.resting_tree.column("name", width=200, minwidth=150)
+        self.resting_tree.column("time", width=120, minwidth=100)
+        self.resting_tree.column("rdy", width=100, minwidth=80)
+        self.resting_tree.column("next", width=120, minwidth=100)
+        
+        # Add scrollbar for resting tree
+        resting_scrollbar = ttk.Scrollbar(resting_container, orient=tk.VERTICAL, command=self.resting_tree.yview)
+        self.resting_tree.configure(yscrollcommand=resting_scrollbar.set)
+        
+        self.resting_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        resting_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
         self.resting_tree.bind("<Double-1>", self._on_resting_row_double_click)
+
+        # Status tip
+        ttk.Label(self.live_frame, text="💡 Tip: Double-click any runner to open their personal dashboard. Runner windows auto-open when athletes start running.", 
+                 style="Tip.TLabel").pack(anchor=tk.W, pady=(12, 0))
 
         # Analytics Tab with card styling
         self.analytics_frame = ttk.Frame(self, style="Card.TFrame")
         self.analytics_frame.configure(padding=(20, 16))
-        self.notebook.add(self.analytics_frame, text="Analytics", padding=8)
+        self.notebook.add(self.analytics_frame, text="📊 Analytics", padding=8)
 
-        ttk.Label(self.analytics_frame, text="Workout Statistics", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 12))
+        # Analytics header with controls
+        analytics_header = ttk.Frame(self.analytics_frame, style="Card.TFrame")
+        analytics_header.pack(fill=tk.X, pady=(0, 16))
+        
+        ttk.Label(analytics_header, text="Workout Statistics", style="Header.TLabel").pack(side=tk.LEFT)
+        
+        # Chart mode selector
+        chart_controls = ttk.Frame(analytics_header, style="Card.TFrame")
+        chart_controls.pack(side=tk.RIGHT)
+        
+        ttk.Label(chart_controls, text="Chart:", style="Body.TLabel").pack(side=tk.LEFT, padx=(0, 8))
+        self.chart_mode_var = tk.StringVar(value="pace")
+        chart_combo = ttk.Combobox(chart_controls, textvariable=self.chart_mode_var, 
+                                  values=["pace", "split", "run_vs_rest", "rest_efficiency", "avg_pace", "progress"],
+                                  state="readonly", width=15)
+        chart_combo.pack(side=tk.LEFT, padx=(0, 8))
+        chart_combo.bind("<<ComboboxSelected>>", lambda e: self._on_chart_mode_changed())
+        
+        ttk.Button(chart_controls, text="🔄 Refresh", 
+                  command=self._update_analytics, style="Secondary.TButton").pack(side=tk.LEFT)
+
         self.stats_label = ttk.Label(self.analytics_frame, text="Loading...", style="Body.TLabel")
         self.stats_label.pack(anchor=tk.W, pady=(0, 16))
 
@@ -234,9 +336,23 @@ class CoachView(tk.Frame):
         self._update_analytics()
 
     def _update_running_table(self, views: List[RunnerRunningView]):
+        # Track which runners were previously running
+        previous_running_ids = set()
+        for item in self.running_tree.get_children():
+            previous_running_ids.add(int(item))
+        
         self.running_tree.delete(*self.running_tree.get_children())
+        current_running_ids = set()
+        
         for v in views:
-            self.running_tree.insert("", tk.END, iid=str(v.runner_id), values=(v.runner_name, v.interval_number, v.laps_completed, f"{v.laps_completed}/{v.laps_per_interval}"))
+            # For now, show N/A for pace since it's not in the DTO
+            pace_display = "N/A"
+            self.running_tree.insert("", tk.END, iid=str(v.runner_id), values=(v.runner_name, v.interval_number, v.laps_completed, f"{v.laps_completed}/{v.laps_per_interval}", pace_display))
+            current_running_ids.add(v.runner_id)
+            
+            # Auto-open runner window if this runner just started running
+            if v.runner_id not in previous_running_ids and v.interval_number > 0:
+                self._auto_open_runner_window(v.runner_id)
 
     def _populate_standby_runners(self):
         if not self.repo:
@@ -256,7 +372,7 @@ class CoachView(tk.Frame):
                 "",
                 tk.END,
                 iid=str(rs.runner.id),
-                values=(rs.runner.name, 0, 0, status_text)
+                values=(rs.runner.name, 0, 0, status_text, "N/A")
             )
         return True
 
@@ -278,10 +394,10 @@ class CoachView(tk.Frame):
             return
 
         try:
-            parser = CSVWorkoutConfigParser()
-            config = parser.parse_csv_file(file_path)
+            # Use the application layer use case instead of direct external interface call
+            config = self.load_workout_config_uc.execute(self.workout_id, file_path)
 
-            target_workout_id = config.workout_id or self.workout_id
+            target_workout_id = config['workout_id']
             workout = self.repo.get_by_id(target_workout_id) if self.repo else None
 
             if workout and workout.status != WorkoutState.NOT_STARTED:
@@ -294,14 +410,14 @@ class CoachView(tk.Frame):
             if not workout:
                 workout = Workout(
                     workout_id=target_workout_id,
-                    intervalDistance=config.interval_distance,
-                    lapsPerInterval=config.laps_per_interval,
-                    startMode=config.start_mode
+                    intervalDistance=config['interval_distance'],
+                    lapsPerInterval=config['laps_per_interval'],
+                    startMode=config['start_mode']
                 )
             else:
-                workout.intervalDistance = config.interval_distance
-                workout.lapsPerInterval = config.laps_per_interval
-                workout.startMode = config.start_mode
+                workout.intervalDistance = config['interval_distance']
+                workout.lapsPerInterval = config['laps_per_interval']
+                workout.startMode = config['start_mode']
 
             workout.status = WorkoutState.NOT_STARTED
             self.repo.save(workout)
@@ -320,10 +436,9 @@ class CoachView(tk.Frame):
                 f"Loaded {workout.intervalDistance}m x{workout.lapsPerInterval}",
                 ModernTheme.SUCCESS
             )
-        except CSVInputError as e:
-            messagebox.showerror("Workout Parse Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load workout: {str(e)}")
+            self._update_status_badge("Load Failed", ModernTheme.DANGER)
 
     def _on_open_selected_runner(self):
         runner_id = self._get_selected_runner_id()
@@ -379,6 +494,31 @@ class CoachView(tk.Frame):
             self.runner_windows.remove(window)
         window.destroy()
 
+    def _auto_open_runner_window(self, runner_id: int):
+        """Automatically open a runner window when they start running."""
+        runner_session = self._find_runner_session_in_workout(runner_id)
+        if not runner_session:
+            return
+
+        # Check if window already exists
+        existing_window = next((w for w in self.runner_windows if getattr(w, "runner_id", None) == runner_id), None)
+        if existing_window:
+            existing_window.lift()
+            return
+
+        # Create new runner window
+        runner_window = RunnerView(
+            self.parent,
+            self.get_rest_uc,
+            self.get_runner_analytics_uc,
+            runner_session.runner,
+            self.workout_id,
+            scan_nfc_uc=self.nfc_uc,
+            scan_rfid_uc=self.rfid_uc
+        )
+        runner_window.protocol("WM_DELETE_WINDOW", lambda w=runner_window: self._on_close_runner_window(w))
+        self.runner_windows.append(runner_window)
+
     def _find_runner_session_in_workout(self, runner_id: int):
         if not self.repo:
             return None
@@ -394,7 +534,18 @@ class CoachView(tk.Frame):
     def _update_resting_table(self, views: List[RunnerRestView]):
         self.resting_tree.delete(*self.resting_tree.get_children())
         for v in views:
-            self.resting_tree.insert("", tk.END, iid=str(v.runner_id), values=(v.runner_name, v.remaining_rest_seconds, "✓" if v.is_ready_to_run else "✗"))
+            # Format remaining time nicely
+            if v.remaining_rest_seconds > 0:
+                minutes = v.remaining_rest_seconds // 60
+                seconds = v.remaining_rest_seconds % 60
+                time_display = f"{minutes}:{seconds:02d}"
+            else:
+                time_display = "Ready"
+            
+            status_display = "Ready" if v.is_ready_to_run else "Resting"
+            next_action = "Scan to Run" if v.is_ready_to_run else f"Rest {time_display}"
+            
+            self.resting_tree.insert("", tk.END, iid=str(v.runner_id), values=(v.runner_name, time_display, status_display, next_action))
 
     def _clear_charts(self):
         for w in self.chart_frame.winfo_children():
@@ -421,64 +572,39 @@ class CoachView(tk.Frame):
             return
         
         try:
-            parser = CSVRosterParser()
-            roster_data = parser.parse_csv_file(file_path)
-            
-            # Validate unique tags
-            is_valid, errors = parser.validate_unique_tags(roster_data)
-            if not is_valid:
-                messagebox.showerror("CSV Error", f"Duplicate tags found:\n" + "\n".join(errors[:5]))
-                return
-            
-            # Get or create workout
-            if not self.repo:
-                messagebox.showerror("Error", "Repository not available")
-                return
+            # Use the application layer use case instead of direct external interface calls
+            added_runners = self.load_roster_uc.execute(self.workout_id, file_path)
             
             workout = self.repo.get_by_id(self.workout_id)
-            if not workout:
-                from domain.workout import Workout
-                workout = Workout(workout_id=self.workout_id, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
-                self.repo.save(workout)
-            else:
-                # Clear existing runners
-                workout.runnerSessions.clear()
-            
-            # Add runners to workout
-            from domain.runner import Runner
-            from domain.runnerSession import RunnerSession
-            
-            runner_id = 1
-            for athlete in roster_data:
-                runner = Runner(
-                    runner_id=runner_id,
-                    name=athlete.name,
-                    email=athlete.email,
-                    nfc_tag=athlete.nfc_id,
-                    rfid_tag=athlete.rfid_id
-                )
-                runner_session = RunnerSession(runner=runner, restDuration=60)
-                workout.add_runner_session(runner_session)
-                runner_id += 1
-            
-            self.repo.save(workout)
             self.workout_active = workout.status == WorkoutState.ACTIVE
             self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
             self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
 
+            # Save as last known roster
+            runners = [session.runner for session in workout.runnerSessions]
+            self.last_roster_service.save_roster(runners)
+
             # Refresh UI and show success message
             self._poll()
-            messagebox.showinfo("Success", f"Loaded {len(roster_data)} athletes")
-            self._update_status_badge(f"✓ {len(roster_data)} runners", ModernTheme.SUCCESS)
+            messagebox.showinfo("Success", f"Loaded {len(added_runners)} athletes")
+            self._update_status_badge(f"✓ {len(added_runners)} runners", ModernTheme.SUCCESS)
             
-        except CSVInputError as e:
-            messagebox.showerror("CSV Parse Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load roster: {str(e)}")
+            self._update_status_badge("Load Failed", ModernTheme.DANGER)
 
     def _on_toggle_chart(self):
+        # Legacy method - now handled by combobox
         self.chart_mode_index = (self.chart_mode_index + 1) % len(self.chart_modes)
+        self.chart_mode_var.set(self.chart_modes[self.chart_mode_index])
         self._update_analytics()
+
+    def _on_chart_mode_changed(self):
+        """Handle chart mode selection from combobox."""
+        selected_mode = self.chart_mode_var.get()
+        if selected_mode in self.chart_modes:
+            self.chart_mode_index = self.chart_modes.index(selected_mode)
+            self._update_analytics()
 
     def _on_start_workout(self):
         try:
@@ -626,6 +752,184 @@ class CoachView(tk.Frame):
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.figures.append(fig)
         self.canvas_widgets.append(canvas)
+
+    def _on_save_last_roster(self):
+        """Save current roster as the last known roster."""
+        try:
+            if not self.repo:
+                messagebox.showerror("Error", "Repository not available")
+                return
+
+            workout = self.repo.get_by_id(self.workout_id)
+            if not workout or not hasattr(workout, 'runnerSessions') or not workout.runnerSessions:
+                messagebox.showerror("Error", "No roster loaded to save")
+                return
+
+            runners = [session.runner for session in workout.runnerSessions]
+            self.last_roster_service.save_roster(runners)
+            self._update_status_badge("✓ Roster Saved", ModernTheme.SUCCESS)
+            messagebox.showinfo("Success", "Roster saved as last known roster")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save roster: {str(e)}")
+            self._update_status_badge("Save Failed", ModernTheme.DANGER)
+
+    def _on_load_last_roster(self):
+        """Load the last known roster."""
+        try:
+            if not self.last_roster_service.has_saved_roster():
+                messagebox.showerror("Error", "No saved roster found")
+                return
+
+            runners = self.last_roster_service.load_roster()
+            if not runners:
+                messagebox.showerror("Error", "Saved roster is empty")
+                return
+
+            if not self.repo:
+                messagebox.showerror("Error", "Repository not available")
+                return
+
+            workout = self.repo.get_by_id(self.workout_id)
+            if not workout:
+                from domain.workout import Workout
+                workout = Workout(workout_id=self.workout_id, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
+                self.repo.save(workout)
+            else:
+                # Clear existing runners
+                workout.runnerSessions.clear()
+
+            # Add runners to workout
+            from domain.runnerSession import RunnerSession
+            for runner in runners:
+                runner_session = RunnerSession(runner=runner, restDuration=60)
+                workout.add_runner_session(runner_session)
+
+            self.repo.save(workout)
+            self.workout_active = workout.status == WorkoutState.ACTIVE
+            self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
+            self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
+
+            # Refresh UI and show success message
+            self._poll()
+            messagebox.showinfo("Success", f"Loaded {len(runners)} runners from saved roster")
+            self._update_status_badge(f"✓ {len(runners)} runners", ModernTheme.SUCCESS)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load roster: {str(e)}")
+            self._update_status_badge("Load Failed", ModernTheme.DANGER)
+
+    def _on_generate_pdf_reports(self):
+        """Generate PDF reports for all runners in the workout."""
+        try:
+            if not self.generate_report_uc:
+                messagebox.showerror("Error", "Report generation is not configured")
+                return
+
+            if not self.repo:
+                messagebox.showerror("Error", "Repository not available")
+                return
+
+            workout = self.repo.get_by_id(self.workout_id)
+            if not workout:
+                messagebox.showerror("Error", "No workout loaded")
+                return
+
+            if workout.status != WorkoutState.COMPLETED:
+                result = messagebox.askyesno("Warning", 
+                    "Workout is not completed. Generate reports anyway?", 
+                    icon='warning')
+                if not result:
+                    return
+
+            generated_files = self.generate_report_uc.execute(workout)
+            
+            if generated_files:
+                messagebox.showinfo("Success", 
+                    f"Generated {len(generated_files)} PDF reports in 'reports' folder")
+                self._update_status_badge(f"✓ {len(generated_files)} PDFs", ModernTheme.SUCCESS)
+            else:
+                messagebox.showinfo("Info", "No reports generated (no completed intervals)")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate PDF reports: {str(e)}")
+            self._update_status_badge("PDF Failed", ModernTheme.DANGER)
+
+    def _on_toggle_scanning(self):
+        """Start or stop hardware scanning for RFID/NFC."""
+        try:
+            if self.scanning_active:
+                self._stop_scanning()
+            else:
+                self._start_scanning()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to toggle scanning: {str(e)}")
+            self._update_status_badge("Scan Error", ModernTheme.DANGER)
+
+    def _start_scanning(self):
+        """Initialize and start hardware scanning."""
+        try:
+            # Initialize RFID adapter (you may need to configure the scanner address)
+            rfid_scanner_address = "localhost:5084"  # Default Impinj REST endpoint
+            self.rfid_adapter = create_rfid_rest_adapter(rfid_scanner_address)
+            
+            # Initialize NFC adapter
+            self.nfc_adapter = create_nfc_adapter()
+            
+            # Set up event callbacks
+            self.rfid_adapter.set_event_callback(self._on_scanner_event)
+            self.nfc_adapter.set_event_callback(self._on_scanner_event)
+            
+            # Start adapters
+            self.rfid_adapter.start()
+            self.nfc_adapter.start()
+            
+            self.scanning_active = True
+            self._update_status_badge("🔍 Scanning", ModernTheme.INFO)
+            
+            # Update button text
+            if self.scan_button:
+                self.scan_button.config(text="⏹ Stop Scanning")
+                    
+        except ConnectionError as e:
+            self._cleanup_adapters()
+            messagebox.showerror("Connection Error", f"Failed to connect to hardware scanner: {str(e)}")
+            raise
+        except Exception as e:
+            self._cleanup_adapters()
+            messagebox.showerror("Scanner Error", f"Failed to initialize scanners: {str(e)}")
+            raise
+            self.nfc_adapter = None
+
+    def _on_scanner_event(self, payload: ScannerPayload):
+        """Handle scanner events from hardware."""
+        try:
+            timestamp_str = datetime.fromtimestamp(payload.timestamp_ms / 1000).isoformat()
+            
+            if payload.event_type == "RFID":
+                if self.rfid_uc:
+                    result = self.rfid_uc.execute(self.workout_id, payload.tag_id, timestamp_str, use_event_time=True)
+                    if result.decision.value == "ACCEPTED":
+                        self._flash_status_message(f"RFID: {payload.tag_id[:8]}...", ModernTheme.SUCCESS, 1000)
+                    else:
+                        self._flash_status_message(f"RFID rejected: {result.reason.value}", ModernTheme.WARNING, 1500)
+                        
+            elif payload.event_type == "NFC":
+                if self.nfc_uc:
+                    result = self.nfc_uc.execute(self.workout_id, payload.tag_id, timestamp_str, use_event_time=True)
+                    self._flash_status_message(f"NFC: {payload.tag_id[:8]}...", ModernTheme.SUCCESS, 1000)
+                    
+            # Refresh the UI to show updated status
+            self.after(500, self._poll)
+            
+        except Exception as e:
+            print(f"Error processing scanner event: {e}")
+            self._flash_status_message("Scan Error", ModernTheme.DANGER, 2000)
+
+    def _on_window_close(self):
+        """Handle window close event with proper cleanup."""
+        self._stop_scanning()
+        self.parent.destroy()
 
 
 # Canvas utility methods for Apple-style rounded rectangles
