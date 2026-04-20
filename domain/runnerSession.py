@@ -271,6 +271,73 @@ class RunnerSession:
         return self.state == RunnerState.READY
 
     # ---------------------------
+    # Manual correction (coach/admin)
+    # ---------------------------
+
+    def edit_timestamp(
+        self,
+        kind: str,
+        index: int,
+        field: str,
+        new_timestamp: str,
+        lap_index: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        Coach/admin-only: manually overwrite a stored timestamp that the
+        hardware recorded incorrectly.
+
+        Arguments:
+            kind: "interval" or "rest"
+            index: 1-based interval number (kind="interval") or 0-based
+                rest list index (kind="rest")
+            field: "start" | "end" | "lap" (for intervals);
+                "start" | "end" (for rests)
+            new_timestamp: ISO 8601 timestamp string
+            lap_index: 0-based lap index, required when kind="interval" and
+                field="lap"
+
+        Returns the previous timestamp value (may be None if unset).
+        Raises ValueError on invalid arguments.
+        """
+        try:
+            datetime.fromisoformat(new_timestamp)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid ISO 8601 timestamp: {new_timestamp!r}")
+
+        if kind == "interval":
+            if field not in ("start", "end", "lap"):
+                raise ValueError(f"Invalid interval field: {field!r}")
+            if not isinstance(index, int) or index < 1 or index > len(self.intervals):
+                raise ValueError(f"Interval number {index} out of range")
+            interval = self.intervals[index - 1]
+            if field == "lap":
+                laps = interval.get("laps", [])
+                if (
+                    not isinstance(lap_index, int)
+                    or lap_index < 0
+                    or lap_index >= len(laps)
+                ):
+                    raise ValueError(f"Lap index {lap_index} out of range")
+                previous = laps[lap_index]
+                laps[lap_index] = new_timestamp
+                return previous
+            previous = interval.get(field)
+            interval[field] = new_timestamp
+            return previous
+
+        if kind == "rest":
+            if field not in ("start", "end"):
+                raise ValueError(f"Invalid rest field: {field!r}")
+            if not isinstance(index, int) or index < 0 or index >= len(self.rests):
+                raise ValueError(f"Rest index {index} out of range")
+            rest = self.rests[index]
+            previous = rest.get(field)
+            rest[field] = new_timestamp
+            return previous
+
+        raise ValueError(f"Invalid kind: {kind!r}")
+
+    # ---------------------------
     # Persistence helpers
     # ---------------------------
 

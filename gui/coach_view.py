@@ -27,6 +27,7 @@ from gui.analytics_widgets import (
 )
 from gui.runner_view import RunnerView
 from gui.theme import ModernTheme
+from gui.timestamp_editor_view import TimestampEditorView
 
 
 class CoachView(tk.Frame):
@@ -49,6 +50,7 @@ class CoachView(tk.Frame):
         generate_report_uc=None,
         load_workout_config_uc=None,
         load_roster_uc=None,
+        edit_timestamp_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -67,6 +69,7 @@ class CoachView(tk.Frame):
         self.generate_report_uc = generate_report_uc
         self.load_workout_config_uc = load_workout_config_uc
         self.load_roster_uc = load_roster_uc
+        self.edit_timestamp_uc = edit_timestamp_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.chart_modes = ["pace", "split", "run_vs_rest", "rest_efficiency", "avg_pace", "progress"]
@@ -163,6 +166,8 @@ class CoachView(tk.Frame):
                   command=self._on_refresh, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="👤 Runner Details",
                   command=self._on_open_selected_runner, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(secondary_frame, text="✏ Edit Timestamps",
+                  command=self._on_edit_timestamps, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="📊 Charts",
                   command=self._on_toggle_chart, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         
@@ -446,6 +451,38 @@ class CoachView(tk.Frame):
             messagebox.showinfo("Open Runner", "Select a runner from either the running or resting list.")
         else:
             self._open_runner_detail(runner_id)
+
+    def _on_edit_timestamps(self):
+        if self.edit_timestamp_uc is None:
+            messagebox.showerror(
+                "Edit Timestamps",
+                "Timestamp editing is not configured."
+            )
+            return
+
+        runner_id = self._get_selected_runner_id()
+        if runner_id is None:
+            messagebox.showinfo(
+                "Edit Timestamps",
+                "Select a runner from either the running or resting list."
+            )
+            return
+
+        runner_session = self._find_runner_session_in_workout(runner_id)
+        if not runner_session:
+            messagebox.showwarning(
+                "Edit Timestamps",
+                "Could not find runner details for the selected athlete."
+            )
+            return
+
+        TimestampEditorView(
+            self.parent,
+            self.edit_timestamp_uc,
+            self.repo,
+            self.workout_id,
+            runner_session,
+        )
 
     def _on_running_row_double_click(self, event):
         item_id = self.running_tree.identify_row(event.y)
