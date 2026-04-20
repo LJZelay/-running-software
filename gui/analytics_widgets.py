@@ -98,7 +98,7 @@ def plot_pace_trend_for_single(analytics: RunnerAnalyticsDTO, fig: Optional[plt.
 
 
 def plot_run_vs_rest_time(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Figure:
-    """Create a bar chart comparing total run time vs rest time for all runners."""
+    """Create a bar chart comparing total run time and rest efficiency proxy by runner."""
     fig, ax = plt.subplots(figsize=(7, 4))
     
     if not runner_analytics:
@@ -112,10 +112,10 @@ def plot_run_vs_rest_time(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Fig
     rest_times = []
     
     for analytics in runner_analytics:
-        # Calculate total run time from intervals
-        total_run = sum(interval.race_time_s for interval in analytics.intervals if interval.race_time_s)
-        # Calculate total rest time
-        total_rest = sum(interval.rest_time_s for interval in analytics.intervals if interval.rest_time_s)
+        # Calculate total run time from interval durations.
+        total_run = sum(interval.duration_ms for interval in analytics.intervals) / 1000.0
+        # Use rest efficiency as a visible proxy (%).
+        total_rest = (analytics.rest_efficiency or 0.0) * 100.0
         
         runner_names.append(analytics.runner_name)
         run_times.append(total_run)
@@ -125,11 +125,11 @@ def plot_run_vs_rest_time(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Fig
     width = 0.35
     
     ax.bar([i - width/2 for i in x], run_times, width, label="Run Time", color="#007AFF")
-    ax.bar([i + width/2 for i in x], rest_times, width, label="Rest Time", color="#34C759")
+    ax.bar([i + width/2 for i in x], rest_times, width, label="Rest Efficiency (%)", color="#34C759")
     
     ax.set_xlabel("Runner")
-    ax.set_ylabel("Time (seconds)")
-    ax.set_title("Run Time vs Rest Time by Runner")
+    ax.set_ylabel("Seconds / Percent")
+    ax.set_title("Run Time vs Rest Efficiency")
     ax.set_xticks(x)
     ax.set_xticklabels(runner_names, rotation=45, ha="right")
     ax.legend()
@@ -154,21 +154,15 @@ def plot_rest_efficiency(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Figu
     
     for analytics in runner_analytics:
         runner_names.append(analytics.runner_name)
-        # Efficiency = average rest time / number of intervals (more rest per interval = better recovery)
-        total_intervals = len(analytics.intervals)
-        if total_intervals > 0:
-            avg_rest = sum(interval.rest_time_s for interval in analytics.intervals if interval.rest_time_s) / total_intervals
-            efficiency_scores.append(avg_rest)
-        else:
-            efficiency_scores.append(0)
-    
-    colors = ["#34C759" if score >= 45 else "#FF9500" if score >= 30 else "#FF3B30" for score in efficiency_scores]
+        efficiency_scores.append((analytics.rest_efficiency or 0.0) * 100.0)
+
+    colors = ["#34C759" if score >= 90 else "#FF9500" if score >= 70 else "#FF3B30" for score in efficiency_scores]
     ax.bar(runner_names, efficiency_scores, color=colors)
     
-    ax.set_ylabel("Average Rest Time per Interval (seconds)")
+    ax.set_ylabel("Rest Efficiency (%)")
     ax.set_title("Rest Efficiency by Runner")
-    ax.axhline(y=45, color="green", linestyle="--", alpha=0.5, label="Good (45s)")
-    ax.axhline(y=30, color="orange", linestyle="--", alpha=0.5, label="Adequate (30s)")
+    ax.axhline(y=90, color="green", linestyle="--", alpha=0.5, label="Good (90%)")
+    ax.axhline(y=70, color="orange", linestyle="--", alpha=0.5, label="Adequate (70%)")
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(fontsize="small")
     
@@ -243,7 +237,7 @@ def plot_workout_progress(runner_analytics: List[RunnerAnalyticsDTO]) -> plt.Fig
     
     for analytics in runner_analytics:
         runner_names.append(analytics.runner_name)
-        completed = len([i for i in analytics.intervals if i.race_time_s and i.race_time_s > 0])
+        completed = len(analytics.intervals)
         total_intervals = len(analytics.intervals)
         completed_intervals.append(completed)
         total_intervals_list.append(total_intervals)
