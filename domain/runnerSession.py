@@ -372,6 +372,7 @@ class RunnerSession:
 
         raise ValueError(f"Invalid kind: {kind!r}")
 
+
     def _validate_logical_ordering(
         self,
         kind: str,
@@ -513,7 +514,7 @@ class RunnerSession:
         return {
             "runner": self.runner.to_dict(),
             "restDuration": self.restDuration,
-            "state": self.state.value, 
+            "state": self.state.value,
             "intervals": self.intervals,
             "rests": self.rests,
             "lastAcceptedRfidEpochMs": self.lastAcceptedRfidEpochMs,
