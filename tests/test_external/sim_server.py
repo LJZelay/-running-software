@@ -13,8 +13,12 @@ Usage:
 
 Config (env vars):
   RFID_SIM_HOST      bind host   (default: 0.0.0.0)
-  RFID_SIM_PORT      bind port   (default: 5000)
-  RFID_SIM_INTERVAL  seconds between tag events (default: 2.0)
+    RFID_SIM_PORT      bind port   (default: 5001)
+    RFID_SIM_INTERVAL  seconds between RFID lap events (default: 1.5)
+    RFID_SIM_HEARTBEAT seconds between keepalive frames (default: 0.4)
+    RFID_SIM_LAPS_PER_INTERVAL laps required to complete an interval (default: 4)
+    RFID_SIM_REST_SECONDS cooldown after interval completion (default: 8)
+    RFID_SIM_TRACK_DISTANCE_M meters per lap for pace metadata (default: 400)
 """
 
 import base64
@@ -32,9 +36,9 @@ app = Flask(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-# A small pool of realistic-looking 96-bit EPCs (12 bytes each)
-SAMPLE_EPCS_HEX = [
-    "300833B2DDD9014000000001",
+# Default tags aligned with team-project-team4/data/athletes.csv
+DEFAULT_EPCS_HEX = [
+    "74",
     "300833B2DDD9014000000002",
     "300833B2DDD9014000000003",
     "300833B2DDD9014000000004",
@@ -42,22 +46,110 @@ SAMPLE_EPCS_HEX = [
     "E2801160600002050000000A",
 ]
 
+EPCS_HEX = [
+    item.strip().upper()
+    for item in os.getenv("RFID_SIM_TAGS", ",".join(DEFAULT_EPCS_HEX)).split(",")
+    if item.strip()
+]
+MODE = os.getenv("RFID_SIM_MODE", "round_robin").strip().lower()
+INTERVAL = float(os.getenv("RFID_SIM_INTERVAL", "1.5"))
+HEARTBEAT_INTERVAL = float(os.getenv("RFID_SIM_HEARTBEAT", "0.4"))
+LAPS_PER_INTERVAL = max(1, int(os.getenv("RFID_SIM_LAPS_PER_INTERVAL", "4")))
+REST_SECONDS = max(0.0, float(os.getenv("RFID_SIM_REST_SECONDS", "8")))
+TRACK_DISTANCE_M = max(1, int(os.getenv("RFID_SIM_TRACK_DISTANCE_M", "400")))
+
+SIM_STATE = {
+    tag: {
+        "total_laps": 0,
+        "interval_laps": 0,
+        "completed_intervals": 0,
+        "next_eligible_at": 0.0,
+        "last_lap_ms": None,
+    }
+    for tag in EPCS_HEX
+}
+
 
 def hex_to_base64(hex_str: str) -> str:
     """Convert a hex EPC string to the base64 encoding the reader sends."""
     return base64.b64encode(bytes.fromhex(hex_str)).decode("ascii")
 
 
-def make_tag_event(epc_hex: str | None = None) -> dict:
-    """Build one tagInventoryEvent payload."""
-    epc_hex = epc_hex or random.choice(SAMPLE_EPCS_HEX)
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _choose_next_tag(last_index: int) -> tuple[str | None, int]:
+    """Pick next eligible tag based on mode and cooldown windows."""
+    if not EPCS_HEX:
+        return None, last_index
+
+    now_s = time.time()
+    eligible_indices = [
+        i for i, tag in enumerate(EPCS_HEX)
+        if SIM_STATE[tag]["next_eligible_at"] <= now_s
+    ]
+    if not eligible_indices:
+        return None, last_index
+
+    if MODE == "random":
+        idx = random.choice(eligible_indices)
+        return EPCS_HEX[idx], idx
+
+    for step in range(1, len(EPCS_HEX) + 1):
+        idx = (last_index + step) % len(EPCS_HEX)
+        if idx in eligible_indices:
+            return EPCS_HEX[idx], idx
+
+    return None, last_index
+
+
+def make_tag_event(epc_hex: str) -> dict:
+    """Build one tagInventoryEvent payload with extra simulation metadata."""
+    state = SIM_STATE[epc_hex]
+    now_ms = int(time.time() * 1000)
+    simulated_lap_ms = random.randint(68_000, 115_000)
+    state["last_lap_ms"] = simulated_lap_ms
+
+    state["total_laps"] += 1
+    state["interval_laps"] += 1
+
+    interval_complete = False
+    if state["interval_laps"] >= LAPS_PER_INTERVAL:
+        interval_complete = True
+        state["completed_intervals"] += 1
+        state["interval_laps"] = 0
+        state["next_eligible_at"] = time.time() + REST_SECONDS
+
+    # Pace metadata for observability; app can ignore unknown fields safely.
+    pace_min_per_km = round((simulated_lap_ms / 1000.0) / (TRACK_DISTANCE_M / 1000.0) / 60.0, 2)
+
     return {
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "timestamp": _now_iso(),
         "tagInventoryEvent": {
             "epc": hex_to_base64(epc_hex),
-            "antennaPort": random.randint(1, 4),
-            "peakRssiCdbm": random.randint(-800, -400),
+            "antennaPort": 1,
+            "peakRssiCdbm": -600,
         },
+        "simMeta": {
+            "totalLaps": state["total_laps"],
+            "intervalLaps": state["interval_laps"],
+            "completedIntervals": state["completed_intervals"],
+            "intervalComplete": interval_complete,
+            "simulatedLapMs": simulated_lap_ms,
+            "simulatedPaceMinPerKm": pace_min_per_km,
+            "trackDistanceM": TRACK_DISTANCE_M,
+            "lapsPerInterval": LAPS_PER_INTERVAL,
+            "restSeconds": REST_SECONDS,
+            "eventEpochMs": now_ms,
+        },
+    }
+
+
+def make_heartbeat_event() -> dict:
+    return {
+        "timestamp": _now_iso(),
+        "simHeartbeat": True,
     }
 
 
@@ -81,19 +173,32 @@ def profiles_start():
 # Streaming endpoint
 # ---------------------------------------------------------------------------
 
-INTERVAL = float(os.getenv("RFID_SIM_INTERVAL", "2.0"))
-
-
 def event_generator():
-    """Yield newline-delimited JSON tag events indefinitely."""
+    """Yield newline-delimited JSON RFID + heartbeat events indefinitely."""
     app.logger.info("📡 Stream client connected")
+    index = -1
+    next_tag_at = time.time()
+    next_heartbeat_at = time.time()
     try:
         while True:
-            payload = make_tag_event()
-            line = json.dumps(payload) + "\n"
-            app.logger.debug("  → %s", line.strip())
-            yield line.encode("utf-8")
-            time.sleep(INTERVAL)
+            now = time.time()
+
+            if now >= next_tag_at:
+                tag, index = _choose_next_tag(index)
+                if tag is not None:
+                    payload = make_tag_event(tag)
+                    line = json.dumps(payload) + "\n"
+                    app.logger.debug("  → RFID %s", line.strip())
+                    yield line.encode("utf-8")
+                next_tag_at = now + INTERVAL
+
+            if now >= next_heartbeat_at:
+                heartbeat = make_heartbeat_event()
+                line = json.dumps(heartbeat) + "\n"
+                yield line.encode("utf-8")
+                next_heartbeat_at = now + HEARTBEAT_INTERVAL
+
+            time.sleep(0.05)
     except GeneratorExit:
         app.logger.info("📡 Stream client disconnected")
 
@@ -120,3 +225,4 @@ if __name__ == "__main__":
 
     # Use threaded=True so the streaming response doesn't block control calls
     app.run(host=host, port=port, threaded=True, debug=True)
+

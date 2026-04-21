@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from externalInterface.acr122u_nfc import NFCReader
 from externalInterface.rfid_impinj_rest import ReaderRfidImpinjRest
+from externalInterface.scanner_event_utils import now_epoch_ms, normalize_nfc_tag_id
 from externalInterface.scanner_adapter import ScannerAdapter, ScannerPayload
 
 
@@ -76,6 +79,42 @@ class ReaderHardwareQueueAdapter(ScannerAdapter):
             self._callback(payload)
 
 
+class SimulatedNFCReader:
+    """Small NFC simulator for local GUI testing without physical hardware."""
+
+    def __init__(self, event_q: queue.Queue, tags: Optional[list[str]] = None, interval_seconds: float = 6.0):
+        self.queue = event_q
+        self.tags = tags or ["NFC002", "NFC003", "NFC004", "NFC005", "NFC006"]
+        self.interval_seconds = interval_seconds
+        self.thread: Optional[threading.Thread] = None
+        self.running = False
+        self._next_index = 0
+
+    def start(self) -> None:
+        if self.thread is not None and self.thread.is_alive():
+            return
+
+        self.running = True
+        self.thread = threading.Thread(target=self._run, name="SimulatedNFCReader", daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.running = False
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while self.running:
+            if not self.tags:
+                time.sleep(self.interval_seconds)
+                continue
+
+            tag_id = self.tags[self._next_index % len(self.tags)]
+            self._next_index += 1
+            self.queue.put((tag_id, now_epoch_ms()))
+            time.sleep(self.interval_seconds)
+
+
 def create_rfid_rest_adapter(scanner_address: str) -> ReaderHardwareQueueAdapter:
     """Create a bridge adapter backed by the local Impinj REST RFID reader."""
 
@@ -88,13 +127,29 @@ def create_rfid_rest_adapter(scanner_address: str) -> ReaderHardwareQueueAdapter
     )
 
 
-def create_nfc_adapter() -> ReaderHardwareQueueAdapter:
-    """Create a bridge adapter backed by the local ACR122U NFC reader."""
+def create_nfc_adapter(tags: Optional[list[str]] = None) -> ReaderHardwareQueueAdapter:
+    """Create a bridge adapter backed by NFC hardware or a lightweight simulator."""
 
     event_q: queue.Queue = queue.Queue()
-    reader = NFCReader(event_q)
+    simulate_nfc = os.getenv("NFC_SIMULATOR", "1").lower() not in {"0", "false", "no"}
+
+    if simulate_nfc:
+        configured_tags = [
+            tag.strip()
+            for tag in os.getenv("NFC_SIM_TAGS", "NFC002,NFC003,NFC004,NFC005,NFC006").split(",")
+            if tag.strip()
+        ]
+        if tags:
+            configured_tags = [normalize_nfc_tag_id(tag) for tag in tags if str(tag).strip()]
+        interval_seconds = float(os.getenv("NFC_SIM_INTERVAL", "6.0"))
+        reader = SimulatedNFCReader(event_q, tags=configured_tags, interval_seconds=interval_seconds)
+    else:
+        reader = NFCReader(event_q)
     return ReaderHardwareQueueAdapter(
         reader=reader,
         event_queue=event_q,
-        config=ReaderHardwareAdapterConfig(event_type="NFC", source="reader_hardware.nfc"),
+        config=ReaderHardwareAdapterConfig(
+            event_type="NFC",
+            source="reader_hardware.nfc.simulated" if simulate_nfc else "reader_hardware.nfc",
+        ),
     )
