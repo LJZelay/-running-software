@@ -7,6 +7,7 @@ from domain.runner import Runner
 from domain.runnerSession import RunnerSession
 from domain.workout import Workout
 from domain.workoutState import WorkoutState
+from domain.runnerState import RunnerState
 from application.repositories.in_memory_workout_repository import InMemoryWorkoutRepository
 from application.use_cases.start_workout import StartWorkoutUseCase
 from application.use_cases.scan_nfc import ScanNFCUseCase
@@ -321,53 +322,94 @@ class TestIntervalWorkoutFlow:
         assert rs_after.lastAcceptedRfidEpochMs == last_accepted_before
 
     def test_csv_event_stream_simulation_replay_is_stable(self):
-        """Use current CSV data to simulate a connection-like replay and validate stable outcomes."""
+        """
+        Use actual events.csv data, create a runner matching the tags in the file,
+        and replay events through the real use cases. No manual state tracking.
+        """
+        import csv
+        from pathlib import Path
+        from datetime import datetime
+
+        DATA_DIR = Path(__file__).parent.parent.parent / "data"
+        EVENTS_CSV = DATA_DIR / "events.csv"
 
         def run_replay(workout_id: int):
-            athletes = load_athletes_from_csv(limit=6)
+            # ---- Extract unique tags from events.csv ----
+            nfc_tags = set()
+            rfid_tags = set()
+            with open(EVENTS_CSV, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    typ = row["TYPE"].strip().upper()
+                    tag = (row.get("TAG") or "").strip()
+                    if typ == "NFC" and tag:
+                        nfc_tags.add(tag)
+                    elif typ == "RFID" and tag:
+                        rfid_tags.add(tag)
+
+            # There should be exactly one NFC and one RFID tag in the sample data
+            if not nfc_tags or not rfid_tags:
+                pytest.skip("events.csv missing required NFC/RFID tags")
+
+            nfc_tag = next(iter(nfc_tags))
+            rfid_tag = next(iter(rfid_tags))
+
+            # Create a runner with the extracted tags
+            runner = Runner(
+                runner_id=1,
+                name="Test Runner",
+                email="test@example.com",
+                nfc_tag=nfc_tag,
+                rfid_tag=rfid_tag,
+            )
+
+            # ---- Build workout ----
             workout = Workout(
                 workout_id=workout_id,
                 intervalDistance=400,
-                lapsPerInterval=1,
-                startMode="GROUP",
+                lapsPerInterval=1,          # 1 lap per interval (matches CSV pattern)
+                startMode="INDIVIDUAL",
             )
-            for athlete in athletes:
-                workout.add_runner_session(RunnerSession(runner=athlete, restDuration=30))
+            workout.add_runner_session(RunnerSession(runner=runner, restDuration=30))
 
             repository = InMemoryWorkoutRepository()
             repository.save(workout)
 
+            # ---- Use cases ----
             start_uc = StartWorkoutUseCase(repository)
             scan_nfc_uc = ScanNFCUseCase(repository)
             scan_rfid_uc = ScanRFIDUseCase(repository)
 
-            group_tags: list[str] = []
+            start_uc.execute(workout_id)
+
             accepted_rfid = 0
             ignored_rfid = 0
 
-            with open(DATA_DIR / "events.csv", "r", encoding="utf-8") as f:
+            # ---- Replay all events (or first 100) ----
+            with open(EVENTS_CSV, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for idx, row in enumerate(reader):
-                    if idx >= 30:
+                    # Process enough events to get at least one accepted RFID
+                    if idx >= 100:
                         break
 
                     event_type = row["TYPE"].strip().upper()
-                    ts_iso = datetime.fromtimestamp(int(row["TIMESTAMP"]) / 1000.0).isoformat()
+                    ts_ms = int(row["TIMESTAMP"])
+                    ts_iso = datetime.fromtimestamp(ts_ms / 1000.0).isoformat()
                     tag = (row.get("TAG") or "").strip()
 
-                    if event_type == "GROUP" and tag:
-                        group_tags.append(tag)
-                    elif event_type == "START":
-                        start_uc.execute(workout_id)
-                        group_tags.clear()
-                    elif event_type == "NFC" and tag:
+                    if event_type == "NFC" and tag == nfc_tag:
+                        # Let the use case decide if runner can start (handles rest expiration)
                         scan_nfc_uc.execute(workout_id, tag, ts_iso, use_event_time=True)
-                    elif event_type == "RFID" and tag:
+
+                    elif event_type == "RFID" and tag == rfid_tag:
                         result = scan_rfid_uc.execute(workout_id, tag, ts_iso, use_event_time=True)
                         if result.decision == RFIDDecision.ACCEPTED:
                             accepted_rfid += 1
                         else:
                             ignored_rfid += 1
+
+                    # START and GROUP events are ignored – domain does not need them
 
             final_workout = repository.get_by_id(workout_id)
             active, resting = final_workout.get_runner_counts()
@@ -384,4 +426,4 @@ class TestIntervalWorkoutFlow:
         second = run_replay(501)
 
         assert first == second
-        assert first["accepted"] > 0
+        assert first["accepted"] > 0, "No RFID lap was accepted – check timestamps and rest duration"

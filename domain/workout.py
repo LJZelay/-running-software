@@ -7,10 +7,18 @@ from domain.workoutState import WorkoutState
 from domain.runnerState import RunnerState
 
 
+
+
 class Workout:
     """
     Domain Entity: Workout
     """
+
+    def reset_for_new_interval(self, now_iso: str):
+        """Update runner states: only set to READY if rest is over (checked via check_if_ready)."""
+        for rs in self.runnerSessions:
+            if rs.state == RunnerState.RESTING:
+                rs.check_if_ready(now=now_iso)
 
     #changed the constructor to include startMode as an optional parameter, and added validation for intervalDistance and lapsPerInterval. Also added helper functions to find runner sessions by NFC and RFID tags, and a function to get the rest screen data for display purposes.
 
@@ -159,15 +167,28 @@ class Workout:
     # Helper functions
     # ---------------------------
 
+    @staticmethod
+    def _normalize_nfc_tag(tag: str) -> str:
+        if tag is None:
+            return ""
+        return str(tag).strip().upper().replace(":", "").replace("-", "").replace(" ", "")
+
+    @staticmethod
+    def _normalize_rfid_tag(tag: str) -> str:
+        normalized = Workout._normalize_nfc_tag(tag)
+        return normalized.lstrip("0") or "0"
+
     def _find_runner_session_by_rfid(self, rfid_tag: str) -> Optional[RunnerSession]:
+        normalized_incoming = self._normalize_rfid_tag(rfid_tag)
         for rs in self.runnerSessions:
-            if rs.runner.rfid_tag == rfid_tag:
+            if self._normalize_rfid_tag(rs.runner.rfid_tag) == normalized_incoming:
                 return rs
         return None
 
     def _find_runner_session_by_nfc(self, nfc_tag: str) -> Optional[RunnerSession]:
+        normalized_incoming = self._normalize_nfc_tag(nfc_tag)
         for rs in self.runnerSessions:
-            if rs.runner.nfc_tag == nfc_tag:
+            if self._normalize_nfc_tag(rs.runner.nfc_tag) == normalized_incoming:
                 return rs
         return None
 
