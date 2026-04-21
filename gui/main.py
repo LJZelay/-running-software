@@ -25,6 +25,7 @@ from application.use_cases.generate_runner_report import GenerateRunnerReportUse
 from application.use_cases.load_workout_config import LoadWorkoutConfigUseCase
 from application.use_cases.load_roster import LoadRosterUseCase
 from application.use_cases.edit_timestamp import EditTimestampUseCase
+from application.use_cases.undo_timestamp_edit import UndoLastTimestampEditUseCase
 from externalInterface.runner_pdf_report_service import RunnerPdfReportService
 from gui.coach_view import CoachView
 from gui.runner_view import RunnerView
@@ -66,6 +67,7 @@ def main():
     load_workout_config_uc = LoadWorkoutConfigUseCase(repo)
     load_roster_uc = LoadRosterUseCase(repo)
     edit_timestamp_uc = EditTimestampUseCase(repo)
+    undo_last_edit_uc = UndoLastTimestampEditUseCase(repo)
 
     # Launch GUI windows
     root = tk.Tk()
@@ -86,6 +88,7 @@ def main():
         load_workout_config_uc=load_workout_config_uc,
         load_roster_uc=load_roster_uc,
         edit_timestamp_uc=edit_timestamp_uc,
+        undo_last_edit_uc=undo_last_edit_uc,
         refresh_interval_ms=1000
     )
     coach.pack(fill=tk.BOTH, expand=True)

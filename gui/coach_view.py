@@ -49,6 +49,7 @@ class CoachView(tk.Frame):
         load_workout_config_uc=None,
         load_roster_uc=None,
         edit_timestamp_uc=None,
+        undo_last_edit_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -68,6 +69,7 @@ class CoachView(tk.Frame):
         self.load_workout_config_uc = load_workout_config_uc
         self.load_roster_uc = load_roster_uc
         self.edit_timestamp_uc = edit_timestamp_uc
+        self.undo_last_edit_uc = undo_last_edit_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.workout_active = False
@@ -759,6 +761,7 @@ class CoachView(tk.Frame):
             self.repo,
             self.workout_id,
             runner_session,
+            undo_last_edit_uc=self.undo_last_edit_uc,
         )
 
     def _on_running_row_double_click(self, event):

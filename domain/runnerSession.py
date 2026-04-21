@@ -62,6 +62,11 @@ class RunnerSession:
         self.lastAcceptedRfidEpochMs = lastAcceptedRfidEpochMs
         self.lastAcceptedNfcEpochMs = lastAcceptedNfcEpochMs
 
+        # History of manual timestamp edits for undo. Each entry is:
+        # {"kind", "index", "field", "lap_index", "previous"}. Not
+        # persisted in to_dict/from_dict; process-lifetime only.
+        self._edit_history: List[Dict[str, Any]] = []
+
     # ---------------------------
     # Domain Behavior
     # ---------------------------
@@ -318,11 +323,31 @@ class RunnerSession:
                     or lap_index >= len(laps)
                 ):
                     raise ValueError(f"Lap index {lap_index} out of range")
+                self._validate_logical_ordering(
+                    kind, index, field, new_timestamp, lap_index
+                )
                 previous = laps[lap_index]
                 laps[lap_index] = new_timestamp
+                self._edit_history.append({
+                    "kind": kind,
+                    "index": index,
+                    "field": field,
+                    "lap_index": lap_index,
+                    "previous": previous,
+                })
                 return previous
+            self._validate_logical_ordering(
+                kind, index, field, new_timestamp, lap_index
+            )
             previous = interval.get(field)
             interval[field] = new_timestamp
+            self._edit_history.append({
+                "kind": kind,
+                "index": index,
+                "field": field,
+                "lap_index": None,
+                "previous": previous,
+            })
             return previous
 
         if kind == "rest":
@@ -330,12 +355,155 @@ class RunnerSession:
                 raise ValueError(f"Invalid rest field: {field!r}")
             if not isinstance(index, int) or index < 0 or index >= len(self.rests):
                 raise ValueError(f"Rest index {index} out of range")
+            self._validate_logical_ordering(
+                kind, index, field, new_timestamp, lap_index
+            )
             rest = self.rests[index]
             previous = rest.get(field)
             rest[field] = new_timestamp
+            self._edit_history.append({
+                "kind": kind,
+                "index": index,
+                "field": field,
+                "lap_index": None,
+                "previous": previous,
+            })
             return previous
 
         raise ValueError(f"Invalid kind: {kind!r}")
+
+    def _validate_logical_ordering(
+        self,
+        kind: str,
+        index: int,
+        field: str,
+        new_timestamp: str,
+        lap_index: "Optional[int]",
+    ) -> None:
+        """
+        Ensure the replacement timestamp stays consistent with the neighbors
+        stored in the same interval or rest. Rules:
+
+        - interval: start <= lap[0] <= lap[1] <= ... <= lap[n-1] <= end
+        - rest:     start <= end
+
+        Only neighbors that already have a value participate in the check, so
+        correcting an earlier field before a later one still works.
+        """
+        new_dt = datetime.fromisoformat(new_timestamp)
+
+        def _parse(value):
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(value)
+            except (TypeError, ValueError):
+                return None
+
+        if kind == "interval":
+            interval = self.intervals[index - 1]
+            start_dt = _parse(interval.get("start"))
+            end_dt = _parse(interval.get("end"))
+            laps = interval.get("laps", [])
+
+            if field == "start":
+                first_lap_dt = _parse(laps[0]) if laps else None
+                upper = first_lap_dt if first_lap_dt is not None else end_dt
+                if upper is not None and new_dt > upper:
+                    raise ValueError(
+                        "Interval start must be at or before the first lap/end"
+                    )
+                return
+
+            if field == "end":
+                last_lap_dt = _parse(laps[-1]) if laps else None
+                lower = last_lap_dt if last_lap_dt is not None else start_dt
+                if lower is not None and new_dt < lower:
+                    raise ValueError(
+                        "Interval end must be at or after the last lap/start"
+                    )
+                return
+
+            if field == "lap":
+                prev_bound = (
+                    _parse(laps[lap_index - 1]) if lap_index > 0 else start_dt
+                )
+                next_bound = (
+                    _parse(laps[lap_index + 1])
+                    if lap_index + 1 < len(laps)
+                    else end_dt
+                )
+                if prev_bound is not None and new_dt < prev_bound:
+                    raise ValueError(
+                        "Lap timestamp must be at or after the previous lap/start"
+                    )
+                if next_bound is not None and new_dt > next_bound:
+                    raise ValueError(
+                        "Lap timestamp must be at or before the next lap/end"
+                    )
+                return
+
+        if kind == "rest":
+            rest = self.rests[index]
+            start_dt = _parse(rest.get("start"))
+            end_dt = _parse(rest.get("end"))
+
+            if field == "start":
+                if end_dt is not None and new_dt > end_dt:
+                    raise ValueError("Rest start must be at or before rest end")
+                return
+
+            if field == "end":
+                if start_dt is not None and new_dt < start_dt:
+                    raise ValueError("Rest end must be at or after rest start")
+                return
+
+    def undo_last_edit(self):
+        """
+        Revert the most recent manual timestamp edit for this runner.
+
+        Returns a dict describing what was undone (keys: kind, index, field,
+        lap_index, reverted_from, reverted_to) or None if there is nothing
+        to undo.
+
+        The restored value was valid at the time it was captured, so this
+        bypasses logical-ordering validation. It also does not push a new
+        entry onto the history (single-direction undo only).
+        """
+        if not self._edit_history:
+            return None
+
+        last = self._edit_history.pop()
+        kind = last["kind"]
+        index = last["index"]
+        field = last["field"]
+        lap_index = last.get("lap_index")
+        previous = last["previous"]
+
+        if kind == "interval":
+            interval = self.intervals[index - 1]
+            if field == "lap":
+                current = interval["laps"][lap_index]
+                interval["laps"][lap_index] = previous
+            else:
+                current = interval.get(field)
+                interval[field] = previous
+        elif kind == "rest":
+            rest = self.rests[index]
+            current = rest.get(field)
+            rest[field] = previous
+        else:
+            self._edit_history.append(last)
+            return None
+
+        return {
+            "kind": kind,
+            "index": index,
+            "field": field,
+            "lap_index": lap_index,
+            "reverted_from": current,
+            "reverted_to": previous,
+        }
 
     # ---------------------------
     # Persistence helpers

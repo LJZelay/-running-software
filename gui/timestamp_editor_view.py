@@ -17,10 +17,12 @@ class TimestampEditorView(tk.Toplevel):
         repo,
         workout_id: int,
         runner_session,
+        undo_last_edit_uc=None,
         **kwargs,
     ):
         super().__init__(parent, **kwargs)
         self.edit_timestamp_uc = edit_timestamp_uc
+        self.undo_last_edit_uc = undo_last_edit_uc
         self.repo = repo
         self.workout_id = workout_id
         self.runner_session = runner_session
@@ -87,6 +89,12 @@ class TimestampEditorView(tk.Toplevel):
             text="Edit Selected",
             command=self._on_edit_selected,
             style="Success.TButton",
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            button_frame,
+            text="Undo Last Edit",
+            command=self._on_undo_last_edit,
+            style="Secondary.TButton",
         ).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(
             button_frame,
@@ -238,6 +246,55 @@ class TimestampEditorView(tk.Toplevel):
         messagebox.showinfo(
             "Timestamp Updated",
             f"Changed {label}\nfrom: {previous}\n  to: {new_timestamp}",
+            parent=self,
+        )
+        self._populate_tree()
+
+    def _on_undo_last_edit(self):
+        if self.undo_last_edit_uc is None:
+            messagebox.showerror(
+                "Undo",
+                "Undo is not configured.",
+                parent=self,
+            )
+            return
+
+        try:
+            result = self.undo_last_edit_uc.execute(
+                workout_id=self.workout_id,
+                runner_id=self.runner_id,
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Undo", f"Failed to undo: {e}", parent=self
+            )
+            return
+
+        if result is None:
+            messagebox.showinfo(
+                "Undo",
+                "Nothing to undo for this runner.",
+                parent=self,
+            )
+            return
+
+        kind = result["kind"]
+        index = result["index"]
+        field = result["field"]
+        reverted_from = result["reverted_from"]
+        reverted_to = result["reverted_to"]
+        label = f"{kind} {index} {field}"
+        lap_index = result.get("lap_index")
+        if lap_index is not None:
+            label += f" (lap {lap_index + 1})"
+
+        messagebox.showinfo(
+            "Undo Successful",
+            (
+                f"Reverted {label}\n"
+                f"from: {reverted_from}\n"
+                f"  to: {reverted_to}"
+            ),
             parent=self,
         )
         self._populate_tree()
