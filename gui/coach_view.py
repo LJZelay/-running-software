@@ -26,6 +26,9 @@ from gui.analytics_widgets import (
 from gui.runner_view import RunnerView
 from gui.theme import ModernTheme
 
+from application.workout_repo import save_workout_summary, StorageThresholdWarning
+from gui.workout_repo_page import WorkoutRepoPage
+
 
 class CoachView(tk.Frame):
     """Coach dashboard with life status and analytics."""
@@ -80,7 +83,6 @@ class CoachView(tk.Frame):
         self._cached_runner_analytics = None
         self._cached_workout_stats = None
 
-
         # For matplotlib figures and canvas widgets
         self.figures = []
         self.canvas_widgets = []
@@ -111,7 +113,6 @@ class CoachView(tk.Frame):
         # Title with proper hierarchy
         title_label = ttk.Label(toolbar, text="Interval Training", style="Title.TLabel")
         title_label.pack(side=tk.LEFT, padx=(0, 24))
-
 
         # Supplementary guidance text
         toolbar_tip = ttk.Label(toolbar,
@@ -162,9 +163,9 @@ class CoachView(tk.Frame):
         
         # Workout and scanning buttons
         ttk.Button(secondary_frame, text="🛠 Pre-Config",
-              command=self._on_preconfigure_workout, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+                  command=self._on_preconfigure_workout, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="⚙ Load Workout",
-                  command=self._on_load_workout, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+                  command=self._on_load_workout_repo_page, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         self.scan_button = ttk.Button(secondary_frame, text="📡 Start Scanning",
                   command=self._on_toggle_scanning, style="Secondary.TButton")
         self.scan_button.pack(side=tk.LEFT, padx=(0, 8))
@@ -407,6 +408,7 @@ class CoachView(tk.Frame):
                 self.runner_detail_canvas.yview_scroll(1, "units")
             return "break"
         self.runner_detail_canvas.bind_all("<MouseWheel>", _on_runner_detail_mousewheel)
+
     def _bind_mousewheel(self, widget, scrollbar):
         # Cross-platform mousewheel binding for Treeview widgets
         def _on_mousewheel(event):
@@ -416,15 +418,15 @@ class CoachView(tk.Frame):
                 widget.yview_scroll(1, "units")
             return "break"
 
-
         # Windows and MacOS
         widget.bind("<MouseWheel>", _on_mousewheel)
         # Linux (event.num 4/5)
         widget.bind("<Button-4>", _on_mousewheel)
         widget.bind("<Button-5>", _on_mousewheel)
 
-
-        # ...existing code...
+    def _on_load_workout_repo_page(self):
+        print("OPENING REPO PAGE")
+        WorkoutRepoPage(self.parent)
 
     def _update_status_badge(self, status: str, color: str = ModernTheme.WARNING):
         """Update status badge with smooth visual feedback."""
@@ -539,73 +541,47 @@ class CoachView(tk.Frame):
         )
 
     def _on_load_workout(self):
-        file_path = filedialog.askopenfilename(
-            title="Load Workout Info",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
-        if not file_path:
+        try:
+            from application.workout_repo import list_workouts, load_workout_summary
+        except ImportError:
+            messagebox.showerror("Error", "Persistent storage module not found.")
             return
 
+        workouts = list_workouts()
+        if not workouts:
+            messagebox.showinfo("No Workouts", "No workouts found")
+            return
+
+        items = [f"{w.get('name', '')} ({w.get('date', '')})" for w in workouts]
+        selected = simpledialog.askstring("Select Workout", "Choose workout by number:\n" + "\n".join(f"{i+1}. {item}" for i, item in enumerate(items)), parent=self.parent)
+        if not selected:
+            return
         try:
-            # Use the application layer use case instead of direct external interface call
-            config = self.load_workout_config_uc.execute(self.workout_id, file_path)
-
-            target_workout_id = config['workout_id']
-            workout = self.repo.get_by_id(target_workout_id) if self.repo else None
-
-            if workout and workout.status == WorkoutState.ACTIVE:
-                messagebox.showerror(
-                    "Cannot Load Workout",
-                    "Workout settings cannot be changed while workout is active. End workout first."
-                )
-                return
-
-            if not workout:
-                workout = Workout(
-                    workout_id=target_workout_id,
-                    intervalDistance=config['interval_distance'],
-                    lapsPerInterval=config['laps_per_interval'],
-                    startMode=config['start_mode']
-                )
-            elif workout.status == WorkoutState.COMPLETED:
-                # Reset interval/rest timing after completion while preserving roster.
-                from domain.runnerSession import RunnerSession
-                preserved_runners = [(rs.runner, rs.restDuration) for rs in workout.runnerSessions]
-                workout = Workout(
-                    workout_id=target_workout_id,
-                    intervalDistance=config['interval_distance'],
-                    lapsPerInterval=config['laps_per_interval'],
-                    startMode=config['start_mode']
-                )
-                for runner, rest_duration in preserved_runners:
-                    workout.add_runner_session(RunnerSession(runner=runner, restDuration=rest_duration))
-            else:
-                workout.intervalDistance = config['interval_distance']
-                workout.lapsPerInterval = config['laps_per_interval']
-                workout.startMode = config['start_mode']
-
-            workout.status = WorkoutState.NOT_STARTED
-            self.repo.save(workout)
-            self.workout_id = target_workout_id
-            self.workout_active = False
-            self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
-            self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
-            self._auto_opened_runner_ids.clear()
-            self._clear_analytics_cache()
-            self._update_workout_info_label(workout)
-            self._poll()
-
-            messagebox.showinfo(
-                "Workout Loaded",
-                f"Loaded workout: {workout.intervalDistance}m intervals, {workout.lapsPerInterval} laps, {workout.startMode}."
-            )
-            self._update_status_badge(
-                f"Loaded {workout.intervalDistance}m x{workout.lapsPerInterval}",
-                ModernTheme.SUCCESS
-            )
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load workout: {str(e)}")
-            self._update_status_badge("Load Failed", ModernTheme.DANGER)
+            idx = int(selected) - 1
+            if idx < 0 or idx >= len(workouts):
+                raise ValueError
+        except Exception:
+            messagebox.showerror("Invalid Selection", "Please enter a valid number.")
+            return
+        workout_id = workouts[idx]["workout_id"]
+        data = load_workout_summary(workout_id)
+        if not data:
+            messagebox.showerror("Error", "Workout data not found.")
+            return
+        config = data.get("config", {})
+        roster = data.get("roster", {})
+        results = data.get("results", {})
+        # Display config, roster, results in existing UI components if available
+        if hasattr(self, "config_text"):
+            self.config_text.delete("1.0", tk.END)
+            self.config_text.insert(tk.END, str(config))
+        if hasattr(self, "roster_text"):
+            self.roster_text.delete("1.0", tk.END)
+            self.roster_text.insert(tk.END, str(roster))
+        if hasattr(self, "results_text"):
+            self.results_text.delete("1.0", tk.END)
+            self.results_text.insert(tk.END, str(results))
+        messagebox.showinfo("Workout Loaded", f"Loaded workout: {workouts[idx].get('name','')} ({workouts[idx].get('date','')})")
 
     def _on_preconfigure_workout(self):
         """Prompt for workout settings without requiring CSV/hardcoded values."""
@@ -909,7 +885,6 @@ class CoachView(tk.Frame):
                 ),
             )
 
-
     def _clear_charts(self):
         for w in self.chart_frame.winfo_children():
             w.destroy()
@@ -1176,15 +1151,13 @@ class CoachView(tk.Frame):
         self._flash_status_message(message, ModernTheme.DANGER)
 
     def _on_end_workout(self):
-        # Forgiveness principle: Confirm destructive action
         if not messagebox.askyesno("End Workout",
-                                  "Are you sure you want to end the workout?\n\nThis will stop all runners and finalize the session.",
-                                  icon='warning'):
+                                   "Are you sure you want to end the workout?\n\nThis will stop all runners and finalize the session.",
+                                   icon='warning'):
             return
 
         try:
             if self.end_workout_uc:
-                # Provide immediate feedback
                 self._flash_status_message("Ending workout...", ModernTheme.WARNING)
                 self.btn_end.config(state=tk.DISABLED, text="⏳ Ending...")
 
@@ -1197,16 +1170,31 @@ class CoachView(tk.Frame):
                 except Exception:
                     self._clear_analytics_cache()
 
-                # Update button states with clear visual hierarchy
+                # --- NEW: Prompt for workout name and save full summary ---
+                workout_name = simpledialog.askstring(
+                    "Save Workout",
+                    "Enter a name for this workout session:",
+                    parent=self.parent
+                )
+                if not workout_name:
+                    workout_name = f"Workout_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+                summary_dict = self._build_workout_summary_dict(workout_name)
+                try:
+                    save_workout_summary(str(self.workout_id), summary_dict)
+                    self._flash_status_message(f"Workout saved as '{workout_name}'", ModernTheme.SUCCESS)
+                except StorageThresholdWarning as warn:
+                    messagebox.showwarning("Storage Limit Warning", str(warn))
+                except Exception as e:
+                    messagebox.showerror("Save Error", f"Failed to save workout summary: {e}")
+
+                # Update button states
                 self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
                 self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
-
-                # Clear completion feedback
                 self._update_status_badge("⏹ Completed", ModernTheme.PRIMARY)
                 self._flash_status_message("Workout ended successfully!", ModernTheme.SUCCESS)
 
         except Exception as e:
-            # Error recovery with clear feedback
             self.btn_end.config(state=tk.NORMAL, text="⏹ End Workout")
             self._update_status_badge("❌ End Failed", ModernTheme.DANGER)
             self._flash_status_message(f"Failed to end workout: {str(e)}", ModernTheme.DANGER)
@@ -1455,7 +1443,6 @@ class CoachView(tk.Frame):
             self._cleanup_adapters()
             messagebox.showerror("Scanner Error", f"Failed to initialize scanners: {str(e)}")
             raise
-            self.nfc_adapter = None
 
     def _on_scanner_event(self, payload: ScannerPayload):
         """Handle scanner events from hardware."""
@@ -1522,6 +1509,65 @@ class CoachView(tk.Frame):
         """Handle window close event with proper cleanup."""
         self._stop_scanning()
         self.parent.destroy()
+
+    def _build_workout_summary_dict(self, workout_name: str) -> dict:
+        """Build a complete summary dict with config, roster, and results."""
+        workout = self.repo.get_by_id(self.workout_id)
+        if not workout:
+            return {}
+
+        # --- Configuration ---
+        config = {
+            "interval_distance_m": workout.intervalDistance,
+            "laps_per_interval": workout.lapsPerInterval,
+            "start_mode": workout.startMode,
+            "default_rest_seconds": self.default_rest_duration,
+            "target_intervals": self.workout_target_intervals,
+        }
+
+        # --- Roster (list of runners with their tags) ---
+        roster = []
+        for rs in workout.runnerSessions:
+            roster.append({
+                "id": rs.runner.id,
+                "name": rs.runner.name,
+                "rfid_tag": rs.runner.rfid_tag,
+                "nfc_tag": rs.runner.nfc_tag,
+            })
+
+        # --- Results (from analytics DTO) ---
+        analytics_list, _ = self._get_analytics_data()  # returns List[RunnerAnalyticsDTO]
+        results = {}
+        for a in analytics_list:
+            results[str(a.runner_id)] = {
+                "intervals": [
+                    {
+                        "number": i.interval_number,
+                        "duration_ms": i.duration_ms,
+                        "pace_per_km": i.pace_per_km,
+                        "splits_ms": i.splits_ms,
+                    }
+                    for i in a.intervals
+                ],
+                "overall_avg_pace_s_per_km": a.overall_avg_pace,
+                "rest_efficiency": a.rest_efficiency,
+            }
+
+        # --- Global metrics (simple) ---
+        total_runners = len(roster)
+        completed_intervals = sum(len(r["intervals"]) for r in results.values())
+
+        return {
+            "name": workout_name,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "config": config,
+            "roster": roster,
+            "results": results,
+            "global_metrics": {
+                "total_runners": total_runners,
+                "total_completed_intervals": completed_intervals,
+            },
+        }
 
 
 # Canvas utility methods for Apple-style rounded rectangles
