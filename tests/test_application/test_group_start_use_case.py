@@ -38,13 +38,17 @@ def test_group_start_prepares_not_started_runner_sessions():
     ready_count, active_count, resting_count = GroupStartUseCase(repo).execute(1)
 
     assert ready_count == 2
-    assert active_count == 0
+    assert active_count == 2
     assert resting_count == 0
 
     saved = repo.get_by_id(1)
     assert saved is not None
     assert saved.is_active() is True
-    assert all(rs.state == RunnerState.READY for rs in saved.runnerSessions)
+    assert all(rs.state == RunnerState.RUNNING for rs in saved.runnerSessions)
+
+    start_timestamps = [rs.intervals[0]["start"] for rs in saved.runnerSessions]
+    assert len(set(start_timestamps)) == 1
+    assert all(ts is not None for ts in start_timestamps)
 
 
 @pytest.mark.application
@@ -77,11 +81,12 @@ def test_group_start_prepares_only_selected_group_runners():
     ready_count, active_count, resting_count = GroupStartUseCase(repo).execute(2, ["NFC001"])
 
     assert ready_count == 1
-    assert active_count == 0
+    assert active_count == 1
     assert resting_count == 0
 
     saved = repo.get_by_id(2)
     assert saved is not None
     states_by_nfc = {rs.runner.nfc_tag: rs.state for rs in saved.runnerSessions}
-    assert states_by_nfc["NFC001"] == RunnerState.READY
+    assert states_by_nfc["NFC001"] == RunnerState.RUNNING
     assert states_by_nfc["NFC002"] == RunnerState.NOT_STARTED
+    assert saved.runnerSessions[0].intervals[0]["start"] is not None
