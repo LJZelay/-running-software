@@ -68,7 +68,8 @@ class CoachView(tk.Frame):
         self.generate_report_uc = generate_report_uc
         self.load_workout_config_uc = load_workout_config_uc
         self.load_roster_uc = load_roster_uc
-        self.workout_id = workout_id
+        self.current_workout_id = workout_id
+        self.workout_id = workout_id  # Deprecated, kept for backward compatibility
         self.refresh_interval_ms = refresh_interval_ms
         self.workout_active = False
         self.runner_windows = []
@@ -100,6 +101,54 @@ class CoachView(tk.Frame):
 
         # Bind cleanup on window destroy
         self.parent.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
+    def _generate_new_workout_id(self) -> int:
+        """Generate a unique workout ID based on current timestamp."""
+        return int(datetime.now().timestamp() * 1000)
+
+    def _new_workout_session(self):
+        """Start a new workout session: generate new workout ID and reset state."""
+        if self.workout_active:
+            if not messagebox.askyesno(
+                "Active Workout",
+                "A workout is in progress. End it before starting a new session?",
+                icon='warning'
+            ):
+                return
+            self._on_end_workout()
+
+        self.current_workout_id = self._generate_new_workout_id()
+        self.workout_active = False
+        self._clear_analytics_cache()
+        self._auto_opened_runner_ids.clear()
+
+        # Close all open runner windows
+        for window in self.runner_windows:
+            try:
+                window.destroy()
+            except:
+                pass
+        self.runner_windows.clear()
+
+        if self.repo:
+            from domain.workout import Workout
+            workout = Workout(
+                workout_id=self.current_workout_id,
+                intervalDistance=400,
+                lapsPerInterval=1,
+                startMode="INDIVIDUAL"
+            )
+            self.repo.save(workout)
+
+        self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
+        self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
+        self._update_workout_info_label(None)
+        self._poll()
+
+        messagebox.showinfo(
+            "New Workout",
+            f"Created new workout session with ID {self.current_workout_id}.\nLoad a roster and configure as needed."
+        )
 
     def _setup_ui(self):
         """Create the UI widgets."""
@@ -189,6 +238,10 @@ class CoachView(tk.Frame):
                   command=self._on_generate_pdf_reports, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="💾 Export CSV",
                   command=self._on_export, style="Secondary.TButton").pack(side=tk.LEFT)
+
+        # New Workout button
+        ttk.Button(secondary_frame, text="🆕 New Workout",
+                  command=self._new_workout_session, style="Primary.TButton").pack(side=tk.LEFT, padx=(16, 0))
 
         # Coaching tip for better workflow
         ttk.Label(action_frame,
@@ -459,7 +512,7 @@ class CoachView(tk.Frame):
 
     def _poll(self):
         try:
-            running = self.get_running_uc.execute(self.workout_id)
+            running = self.get_running_uc.execute(self.current_workout_id)
             self._update_running_table(running)
             # If the workout is loaded but not started, show the roster in standby mode.
             if not running:
@@ -468,13 +521,12 @@ class CoachView(tk.Frame):
             pass
 
         try:
-            resting = self.get_rest_uc.execute(self.workout_id)
+            resting = self.get_rest_uc.execute(self.current_workout_id)
             self._update_resting_table(resting)
         except Exception:
             pass
 
         self._update_finished_table()
-
         self._update_analytics()
 
     def _update_running_table(self, views: List[RunnerRunningView]):
@@ -510,7 +562,7 @@ class CoachView(tk.Frame):
         if not self.repo:
             return False
 
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if not workout or workout.status != WorkoutState.NOT_STARTED:
             return False
 
@@ -589,7 +641,7 @@ class CoachView(tk.Frame):
             messagebox.showerror("Error", "Repository not available")
             return
 
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if workout and workout.status == WorkoutState.ACTIVE:
             messagebox.showerror("Cannot Configure", "End workout before changing configuration.")
             return
@@ -659,7 +711,7 @@ class CoachView(tk.Frame):
                 preserved_runners = [rs.runner for rs in workout.runnerSessions]
 
             workout = Workout(
-                workout_id=self.workout_id,
+                workout_id=self.current_workout_id,
                 intervalDistance=interval_distance,
                 lapsPerInterval=laps_per_interval,
                 startMode=start_mode,
@@ -735,7 +787,7 @@ class CoachView(tk.Frame):
             self.get_rest_uc,
             self.get_runner_analytics_uc,
             runner_session.runner,
-            self.workout_id,
+            self.current_workout_id,
             scan_nfc_uc=self.nfc_uc,
             scan_rfid_uc=self.rfid_uc
         )
@@ -768,7 +820,7 @@ class CoachView(tk.Frame):
             self.get_rest_uc,
             self.get_runner_analytics_uc,
             runner_session.runner,
-            self.workout_id,
+            self.current_workout_id,
             scan_nfc_uc=self.nfc_uc,
             scan_rfid_uc=self.rfid_uc
         )
@@ -779,7 +831,7 @@ class CoachView(tk.Frame):
     def _find_runner_session_in_workout(self, runner_id: int):
         if not self.repo:
             return None
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if not workout:
             return None
 
@@ -793,7 +845,7 @@ class CoachView(tk.Frame):
         if not self.repo:
             return None
 
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if not workout:
             return None
 
@@ -847,13 +899,13 @@ class CoachView(tk.Frame):
         if not self.repo:
             return
 
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if not workout:
             return
 
         analytics_map = {}
         try:
-            analytics = self.get_runner_analytics_uc.execute(self.workout_id)
+            analytics = self.get_runner_analytics_uc.execute(self.current_workout_id)
             analytics_map = {a.runner_id: a for a in analytics}
         except Exception:
             analytics_map = {}
@@ -907,21 +959,21 @@ class CoachView(tk.Frame):
         if not self.repo:
             return [], None
 
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if (
             workout
             and workout.status == WorkoutState.COMPLETED
-            and self._cached_analytics_workout_id == self.workout_id
+            and self._cached_analytics_workout_id == self.current_workout_id
             and self._cached_runner_analytics is not None
             and self._cached_workout_stats is not None
         ):
             return self._cached_runner_analytics, self._cached_workout_stats
 
-        analytics = self.get_runner_analytics_uc.execute(self.workout_id)
-        stats = self.get_workout_stats_uc.execute(self.workout_id)
+        analytics = self.get_runner_analytics_uc.execute(self.current_workout_id)
+        stats = self.get_workout_stats_uc.execute(self.current_workout_id)
 
         if workout and workout.status == WorkoutState.COMPLETED:
-            self._cached_analytics_workout_id = self.workout_id
+            self._cached_analytics_workout_id = self.current_workout_id
             self._cached_runner_analytics = analytics
             self._cached_workout_stats = stats
 
@@ -994,7 +1046,7 @@ class CoachView(tk.Frame):
     def _export_runner_pdf(self, runner):
         # Export PDF for the selected runner only
         try:
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             if not workout:
                 messagebox.showerror("Export Failed", "Workout not found.")
                 return
@@ -1005,7 +1057,7 @@ class CoachView(tk.Frame):
             # Create a shallow copy of workout with only this runner's session
             class SingleRunnerWorkout:
                 def __init__(self, base, session):
-                    self.workout_id = base.workout_id
+                    self.workout_id = base.workout_id  # Fixed: use workout_id
                     self.intervalDistance = base.intervalDistance
                     self.startTime = getattr(base, 'startTime', None)
                     self.endTime = getattr(base, 'endTime', None)
@@ -1066,12 +1118,12 @@ class CoachView(tk.Frame):
         try:
             # Use the application layer use case instead of direct external interface calls
             added_runners = self.load_roster_uc.execute(
-                self.workout_id,
+                self.current_workout_id,
                 file_path,
                 default_rest_duration=self.default_rest_duration,
             )
             
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             self.workout_active = workout.status == WorkoutState.ACTIVE
             self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
             self.btn_end.config(state=tk.DISABLED, text="⏹ End Workout")
@@ -1103,9 +1155,9 @@ class CoachView(tk.Frame):
             if not self.repo:
                 raise RuntimeError("Workout repository is not available.")
 
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             if workout is None:
-                raise RuntimeError(f"Workout #{self.workout_id} is not loaded.")
+                raise RuntimeError(f"Workout #{self.current_workout_id} is not loaded.")
 
             if workout.status != WorkoutState.NOT_STARTED:
                 raise RuntimeError(f"Workout cannot start because it is already {workout.status.value.replace('_', ' ').lower()}.")
@@ -1117,7 +1169,7 @@ class CoachView(tk.Frame):
             self._flash_status_message("Starting workout...", ModernTheme.PRIMARY)
             self.btn_start.config(state=tk.DISABLED, text="⏳ Starting...")
 
-            started = self.start_workout_uc.execute(self.workout_id)
+            started = self.start_workout_uc.execute(self.current_workout_id)
             if not started:
                 raise RuntimeError("Workout start was blocked by the current workout state.")
 
@@ -1161,16 +1213,16 @@ class CoachView(tk.Frame):
                 self._flash_status_message("Ending workout...", ModernTheme.WARNING)
                 self.btn_end.config(state=tk.DISABLED, text="⏳ Ending...")
 
-                self.end_workout_uc.execute(self.workout_id)
+                self.end_workout_uc.execute(self.current_workout_id)
                 self.workout_active = False
                 self._clear_analytics_cache()
                 try:
                     self._cached_runner_analytics, self._cached_workout_stats = self._get_analytics_data()
-                    self._cached_analytics_workout_id = self.workout_id
+                    self._cached_analytics_workout_id = self.current_workout_id
                 except Exception:
                     self._clear_analytics_cache()
 
-                # --- NEW: Prompt for workout name and save full summary ---
+                # --- Prompt for workout name and save full summary ---
                 workout_name = simpledialog.askstring(
                     "Save Workout",
                     "Enter a name for this workout session:",
@@ -1181,7 +1233,7 @@ class CoachView(tk.Frame):
 
                 summary_dict = self._build_workout_summary_dict(workout_name)
                 try:
-                    save_workout_summary(str(self.workout_id), summary_dict)
+                    save_workout_summary(str(self.current_workout_id), summary_dict)
                     self._flash_status_message(f"Workout saved as '{workout_name}'", ModernTheme.SUCCESS)
                 except StorageThresholdWarning as warn:
                     messagebox.showwarning("Storage Limit Warning", str(warn))
@@ -1201,8 +1253,8 @@ class CoachView(tk.Frame):
 
     def _on_export(self):
         try:
-            stats = self.get_workout_stats_uc.execute(self.workout_id)
-            analytics = self.get_runner_analytics_uc.execute(self.workout_id)
+            stats = self.get_workout_stats_uc.execute(self.current_workout_id)
+            analytics = self.get_runner_analytics_uc.execute(self.current_workout_id)
 
             path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
             if not path:
@@ -1278,7 +1330,7 @@ class CoachView(tk.Frame):
                 messagebox.showerror("Error", "Repository not available")
                 return
 
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             if not workout or not hasattr(workout, 'runnerSessions') or not workout.runnerSessions:
                 messagebox.showerror("Error", "No roster loaded to save")
                 return
@@ -1308,10 +1360,10 @@ class CoachView(tk.Frame):
                 messagebox.showerror("Error", "Repository not available")
                 return
 
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             if not workout:
                 from domain.workout import Workout
-                workout = Workout(workout_id=self.workout_id, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
+                workout = Workout(workout_id=self.current_workout_id, intervalDistance=400, lapsPerInterval=1, startMode="INDIVIDUAL")
                 self.repo.save(workout)
             else:
                 # Clear existing runners
@@ -1349,7 +1401,7 @@ class CoachView(tk.Frame):
                 messagebox.showerror("Error", "Repository not available")
                 return
 
-            workout = self.repo.get_by_id(self.workout_id)
+            workout = self.repo.get_by_id(self.current_workout_id)
             if not workout:
                 messagebox.showerror("Error", "No workout loaded")
                 return
@@ -1414,7 +1466,7 @@ class CoachView(tk.Frame):
             self.rfid_adapter = create_rfid_rest_adapter(rfid_scanner_address)
             
             # Initialize NFC adapter; in simulator mode prefer roster tags for deterministic matching.
-            workout = self.repo.get_by_id(self.workout_id) if self.repo else None
+            workout = self.repo.get_by_id(self.current_workout_id) if self.repo else None
             roster_nfc_tags = []
             if workout:
                 roster_nfc_tags = [rs.runner.nfc_tag for rs in workout.runnerSessions if getattr(rs.runner, "nfc_tag", None)]
@@ -1448,7 +1500,7 @@ class CoachView(tk.Frame):
         """Handle scanner events from hardware."""
         try:
             timestamp_str = datetime.fromtimestamp(payload.timestamp_ms / 1000).isoformat()
-            workout = self.repo.get_by_id(self.workout_id) if self.repo else None
+            workout = self.repo.get_by_id(self.current_workout_id) if self.repo else None
 
             if not workout or workout.status != WorkoutState.ACTIVE:
                 return
@@ -1463,7 +1515,7 @@ class CoachView(tk.Frame):
                     if self._is_runner_finished(session):
                         return
 
-                    result = self.rfid_uc.execute(self.workout_id, normalized_tag, timestamp_str, use_event_time=True)
+                    result = self.rfid_uc.execute(self.current_workout_id, normalized_tag, timestamp_str, use_event_time=True)
                     if result.decision.value == "ACCEPTED":
                         self.after(0, lambda: self._flash_status_message(f"RFID: {normalized_tag[:8]}...", ModernTheme.SUCCESS, 1000))
                     else:
@@ -1483,7 +1535,7 @@ class CoachView(tk.Frame):
                     if session.state == RunnerState.RUNNING:
                         return
 
-                    self.nfc_uc.execute(self.workout_id, normalized_tag, timestamp_str, use_event_time=True)
+                    self.nfc_uc.execute(self.current_workout_id, normalized_tag, timestamp_str, use_event_time=True)
                     self.after(0, lambda: self._flash_status_message(f"NFC: {normalized_tag[:8]}...", ModernTheme.SUCCESS, 1000))
                     
             # Refresh the UI to show updated status
@@ -1512,7 +1564,7 @@ class CoachView(tk.Frame):
 
     def _build_workout_summary_dict(self, workout_name: str) -> dict:
         """Build a complete summary dict with config, roster, and results."""
-        workout = self.repo.get_by_id(self.workout_id)
+        workout = self.repo.get_by_id(self.current_workout_id)
         if not workout:
             return {}
 
