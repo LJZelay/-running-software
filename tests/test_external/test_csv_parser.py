@@ -22,7 +22,7 @@ class TestCSVParserParsing:
         # athletes.csv has 6 athletes
         assert len(roster_data) == 6
         assert roster_data[0].name == "Alice"
-        assert roster_data[0].nfc_id == "NFC001"
+        assert roster_data[0].nfc_id == "DA DA 76 41"
         assert roster_data[1].name == "Bob"
         assert roster_data[1].nfc_id == "NFC002"
     
@@ -40,7 +40,7 @@ Charlie,NFC003,RFID003,charlie@example.com"""
     def test_parse_csv_string_with_missing_required_column(self):
         """Test parsing CSV with missing required column raises error."""
         csv_string = """name,nfc_id,email
-Alice,NFC001,alice@example.com"""
+Alice,DA DA 76 41,alice@example.com"""
         
         parser = CSVRosterParser(strict_validation=True)
         
@@ -67,8 +67,8 @@ class TestCSVParserValidation:
     def test_validate_unique_tags_detects_duplicate_nfc(self):
         """Test that duplicate NFC tags are detected."""
         roster_data = [
-            RosterData(name="Alice", nfc_id="NFC001", rfid_id="RFID001"),
-            RosterData(name="Bob", nfc_id="NFC001", rfid_id="RFID002"),  # Duplicate NFC
+            RosterData(name="Alice", nfc_id="DA DA 76 41", rfid_id="RFID001"),
+            RosterData(name="Bob", nfc_id="DA DA 76 41", rfid_id="RFID002"),  # Duplicate NFC
         ]
         
         parser = CSVRosterParser()
@@ -76,12 +76,12 @@ class TestCSVParserValidation:
         
         assert ok is False
         assert len(errors) > 0
-        assert "NFC001" in str(errors)
+        assert "DA DA 76 41" in str(errors)
     
     def test_validate_unique_tags_detects_duplicate_rfid(self):
         """Test that duplicate RFID tags are detected."""
         roster_data = [
-            RosterData(name="Alice", nfc_id="NFC001", rfid_id="RFID001"),
+            RosterData(name="Alice", nfc_id="DA DA 76 41", rfid_id="RFID001"),
             RosterData(name="Bob", nfc_id="NFC002", rfid_id="RFID001"),  # Duplicate RFID
         ]
         
@@ -99,7 +99,7 @@ class TestCSVParserStrictMode:
     def test_strict_mode_raises_on_invalid_row(self):
         """Test that strict mode raises on invalid rows."""
         csv_string = """name,nfc_id,rfid_id,email
-Alice,NFC001,RFID001,alice@example.com
+Alice,DA DA 76 41,RFID001,alice@example.com
 X,NFC002,RFID002,invalid"""  # Name too short
         
         parser = CSVRosterParser(strict_validation=True)
@@ -110,7 +110,7 @@ X,NFC002,RFID002,invalid"""  # Name too short
     def test_non_strict_mode_skips_invalid_rows(self):
         """Test that non-strict mode skips invalid rows."""
         csv_string = """name,nfc_id,rfid_id,email
-Alice,NFC001,RFID001,alice@example.com
+Alice,DA DA 76 41,RFID001,alice@example.com
 X,NFC002,RFID002,invalid
 Bob,NFC003,RFID003,bob@example.com"""
         

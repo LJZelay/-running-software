@@ -213,6 +213,18 @@ class ModernTheme:
                  background=[("selected", ModernTheme.PRIMARY)],
                  foreground=[("selected", ModernTheme.TEXT_PRIMARY)])
 
+        # Configure labelframe styles for card-like sections
+        style.configure("Card.TLabelframe",
+                       background=ModernTheme.BG_DARK,
+                       foreground=ModernTheme.TEXT_PRIMARY,
+                       borderwidth=0,
+                       relief="flat")
+
+        style.configure("Card.TLabelframe.Label",
+                       background=ModernTheme.BG_DARK,
+                       foreground=ModernTheme.TEXT_PRIMARY,
+                       font=(ModernTheme.FONT_FAMILY, 16, "bold"))
+
         # Configure entry styles
         style.configure("TEntry",
                        background=ModernTheme.BG_SURFACE,
