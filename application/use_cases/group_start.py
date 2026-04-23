@@ -1,4 +1,5 @@
 """Use case for group start - activate workout and prepare selected runners via NFC."""
+from datetime import datetime
 from typing import Optional, Tuple
 from application.repositories.workout_repository import WorkoutRepository
 from application.exceptions import WorkoutNotFoundError
@@ -38,28 +39,31 @@ class GroupStartUseCase:
         if not workout.runnerSessions:
             raise ValueError("Cannot start group: No runners in workout")
         
+        # Use the same timestamp for all runners started in this group start.
+        group_start_timestamp = datetime.now().isoformat()
+
         # Start workout if not already active
         if workout.is_not_started():
-            workout.start()
-        
+            workout.start(timestamp=group_start_timestamp)
+
         # Only proceed if workout is active
         if not workout.is_active():
             raise ValueError(f"Cannot start group: Workout is {workout.status.value}")
-        
+
         selected_tags = set(group_nfc_tags) if group_nfc_tags else None
 
-        # Group start only prepares selected runners; NFC scans begin intervals.
+        # Group start immediately starts selected runners with the same timestamp.
         ready_count = 0
         for runner_session in workout.runnerSessions:
             if runner_session.state == RunnerState.NOT_STARTED or runner_session.is_ready():
                 if selected_tags is not None and runner_session.runner.nfc_tag not in selected_tags:
                     continue
-                if runner_session.state == RunnerState.NOT_STARTED:
+                if runner_session.state == RunnerState.NOT_STARTED or runner_session.is_ready():
                     try:
-                        runner_session.mark_ready()
+                        runner_session.start_interval(group_start_timestamp)
                         ready_count += 1
                     except ValueError:
-                        # Skip if runner cannot be prepared for any reason
+                        # Skip if runner cannot be started for any reason
                         continue
         
         # Save updated workout
