@@ -25,6 +25,7 @@ from gui.analytics_widgets import (
 )
 from gui.runner_view import RunnerView
 from gui.theme import ModernTheme
+from gui.timestamp_editor_view import TimestampEditorView
 
 
 class CoachView(tk.Frame):
@@ -47,6 +48,8 @@ class CoachView(tk.Frame):
         generate_report_uc=None,
         load_workout_config_uc=None,
         load_roster_uc=None,
+        edit_timestamp_uc=None,
+        undo_last_edit_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -65,6 +68,8 @@ class CoachView(tk.Frame):
         self.generate_report_uc = generate_report_uc
         self.load_workout_config_uc = load_workout_config_uc
         self.load_roster_uc = load_roster_uc
+        self.edit_timestamp_uc = edit_timestamp_uc
+        self.undo_last_edit_uc = undo_last_edit_uc
         self.workout_id = workout_id
         self.refresh_interval_ms = refresh_interval_ms
         self.workout_active = False
@@ -177,6 +182,9 @@ class CoachView(tk.Frame):
                   command=self._on_refresh, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="👤 Runner Details",
                   command=self._on_open_selected_runner, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_review = ttk.Button(secondary_frame, text="🔍 Review Workout",
+                  command=self._on_edit_timestamps, style="Secondary.TButton", state=tk.DISABLED)
+        self.btn_review.pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(secondary_frame, text="📊 Charts",
                   command=self._on_toggle_chart, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         
@@ -475,12 +483,26 @@ class CoachView(tk.Frame):
 
         self._update_analytics()
 
+        # Review Workout is a post-workout action: enable only when completed.
+        try:
+            btn = getattr(self, "btn_review", None)
+            if btn is not None:
+                workout = self.repo.get_by_id(self.workout_id) if self.repo else None
+                if workout and workout.status == WorkoutState.COMPLETED:
+                    btn.config(state=tk.NORMAL)
+                else:
+                    btn.config(state=tk.DISABLED)
+        except Exception:
+            pass
+
     def _update_running_table(self, views: List[RunnerRunningView]):
         # Track which runners were previously running
         previous_running_ids = set()
         for item in self.running_tree.get_children():
             previous_running_ids.add(int(item))
         
+        # Preserve user selection across the rebuild so 1s poll doesn't steal it.
+        preserved_selection = self.running_tree.selection()
         self.running_tree.delete(*self.running_tree.get_children())
         current_running_ids = set()
         
@@ -504,6 +526,14 @@ class CoachView(tk.Frame):
             if self.auto_open_runner_windows and v.runner_id not in previous_running_ids and v.interval_number > 0:
                 self._auto_open_runner_window(v.runner_id)
 
+        # Re-apply user selection for iids that still exist post-rebuild.
+        still_present = [iid for iid in preserved_selection if self.running_tree.exists(iid)]
+        if still_present:
+            try:
+                self.running_tree.selection_set(still_present)
+            except Exception:
+                pass
+
     def _populate_standby_runners(self):
         if not self.repo:
             return False
@@ -515,6 +545,7 @@ class CoachView(tk.Frame):
         if not getattr(workout, "runnerSessions", None):
             return False
 
+        preserved_selection = self.running_tree.selection()
         self.running_tree.delete(*self.running_tree.get_children())
         for rs in sorted(workout.runnerSessions, key=lambda session: session.runner.name):
             status_text = "Ready" if rs.state == RunnerState.READY else "Standby"
@@ -527,6 +558,12 @@ class CoachView(tk.Frame):
                 iid=str(rs.runner.id),
                 values=(first_name, last_name, 0, 0, status_text, "N/A")
             )
+        still_present = [iid for iid in preserved_selection if self.running_tree.exists(iid)]
+        if still_present:
+            try:
+                self.running_tree.selection_set(still_present)
+            except Exception:
+                pass
         return True
 
     def _update_workout_info_label(self, workout: Workout):
@@ -724,6 +761,51 @@ class CoachView(tk.Frame):
         else:
             self._open_runner_detail(runner_id)
 
+    def _on_edit_timestamps(self):
+        if self.edit_timestamp_uc is None:
+            messagebox.showerror(
+                "Review Workout",
+                "Timestamp editing is not configured."
+            )
+            return
+
+        workout = self.repo.get_by_id(self.workout_id) if self.repo else None
+        if not workout or workout.status != WorkoutState.COMPLETED:
+            messagebox.showinfo(
+                "Review Workout",
+                "Review & edit timestamps is only available after the workout has ended."
+            )
+            return
+
+        # Post-workout the runner lives in the finished table; only fall
+        # back to running/resting if the finished table has no selection.
+        runner_id = self._get_selected_finished_runner_id()
+        if runner_id is None:
+            runner_id = self._get_selected_runner_id()
+        if runner_id is None:
+            messagebox.showinfo(
+                "Review Workout",
+                "Select a runner from the finished list to review their timestamps."
+            )
+            return
+
+        runner_session = self._find_runner_session_in_workout(runner_id)
+        if not runner_session:
+            messagebox.showwarning(
+                "Review Workout",
+                "Could not find runner details for the selected athlete."
+            )
+            return
+
+        TimestampEditorView(
+            self.parent,
+            self.edit_timestamp_uc,
+            self.repo,
+            self.workout_id,
+            runner_session,
+            undo_last_edit_uc=self.undo_last_edit_uc,
+        )
+
     def _on_running_row_double_click(self, event):
         item_id = self.running_tree.identify_row(event.y)
         if item_id:
@@ -742,6 +824,19 @@ class CoachView(tk.Frame):
         if selection:
             return int(selection[0])
         return None
+
+    def _get_selected_finished_runner_id(self):
+        """Parse a 'finished-{id}' iid out of the finished table selection."""
+        selection = self.finished_tree.selection()
+        if not selection:
+            return None
+        iid = selection[0]
+        if not iid.startswith("finished-"):
+            return None
+        try:
+            return int(iid.split("-", 1)[1])
+        except ValueError:
+            return None
 
     def _open_runner_detail(self, runner_id: int):
         runner_session = self._find_runner_session_in_workout(runner_id)
@@ -835,6 +930,7 @@ class CoachView(tk.Frame):
         return None
 
     def _update_resting_table(self, views: List[RunnerRestView]):
+        preserved_selection = self.resting_tree.selection()
         self.resting_tree.delete(*self.resting_tree.get_children())
         for v in views:
             runner_session = self._find_runner_session_in_workout(v.runner_id)
@@ -856,6 +952,13 @@ class CoachView(tk.Frame):
             last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
             self.resting_tree.insert("", tk.END, iid=str(v.runner_id), values=(first_name, last_name, time_display, status_display, next_action))
 
+        still_present = [iid for iid in preserved_selection if self.resting_tree.exists(iid)]
+        if still_present:
+            try:
+                self.resting_tree.selection_set(still_present)
+            except Exception:
+                pass
+
     def _completed_intervals(self, runner_session) -> int:
         return sum(1 for interval in runner_session.intervals if interval.get("end"))
 
@@ -866,6 +969,7 @@ class CoachView(tk.Frame):
         return self._completed_intervals(runner_session) >= self.workout_target_intervals
 
     def _update_finished_table(self):
+        preserved_selection = self.finished_tree.selection()
         self.finished_tree.delete(*self.finished_tree.get_children())
 
         if not self.repo:
@@ -909,6 +1013,13 @@ class CoachView(tk.Frame):
                 ),
             )
 
+
+        still_present = [iid for iid in preserved_selection if self.finished_tree.exists(iid)]
+        if still_present:
+            try:
+                self.finished_tree.selection_set(still_present)
+            except Exception:
+                pass
 
     def _clear_charts(self):
         for w in self.chart_frame.winfo_children():
