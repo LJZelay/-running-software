@@ -508,11 +508,16 @@ class IntervalTrainingCLI:
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def _init_optional_hardware_nfc_adapter(self):
-        """Optionally wire a real reader_hardware NFC adapter when enabled by env."""
+        """Wire a real reader_hardware NFC adapter by default for external/beta release."""
         if not self.rfid_worker_service or create_nfc_adapter is None:
             return
 
-        enabled = self._env_true("FEATURE2_ENABLE_NFC") or self._env_true("FEATURE2_NFC_ENABLED")
+        # For external/beta release: always enable unless explicitly disabled
+        enabled = (
+            self._env_true("FEATURE2_ENABLE_NFC")
+            or self._env_true("FEATURE2_NFC_ENABLED")
+            or os.getenv("EXTERNAL_CLIENT_MODE", "1").strip() in {"1", "true", "yes", "on"}
+        )
         if not enabled:
             return
 

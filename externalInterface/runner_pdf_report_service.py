@@ -12,15 +12,16 @@ class RunnerPdfReportService:
     def __init__(self, output_dir: Optional[Path] = None) -> None:
         self.output_dir = Path(output_dir) if output_dir is not None else Path("reports")
 
-    def generate_reports_for_workout(self, workout: object) -> list[Path]:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+    def generate_reports_for_workout(self, workout: object, output_dir: Optional[Path] = None) -> list[Path]:
+        target_dir = output_dir if output_dir is not None else self.output_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
         generated: list[Path] = []
 
         for session in workout.runnerSessions:
             report_lines = self._build_report_lines(workout, session)
             safe_name = self._sanitize_filename(session.runner.name)
             file_name = f"workout_{workout.workout_id}_runner_{session.runner.id}_{safe_name}.pdf"
-            output_path = self.output_dir / file_name
+            output_path = target_dir / file_name
             self._write_simple_pdf(report_lines, output_path)
             generated.append(output_path)
 

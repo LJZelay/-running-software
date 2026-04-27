@@ -55,6 +55,7 @@ class GroupStartUseCase:
         # Group start immediately starts selected runners with the same timestamp.
         ready_count = 0
         for runner_session in workout.runnerSessions:
+            print(f"Group start: Started {ready_count} runners")
             if runner_session.state == RunnerState.NOT_STARTED or runner_session.is_ready():
                 if selected_tags is not None and runner_session.runner.nfc_tag not in selected_tags:
                     continue
