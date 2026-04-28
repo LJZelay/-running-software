@@ -288,17 +288,16 @@ class CoachView(tk.Frame):
         self.live_canvas.bind("<Configure>", _sync_live_scrollregion)
 
         def _on_live_tab_mousewheel(event):
-            # Only scroll if the Live Status tab is selected (index 0)
-            if self.notebook.index(self.notebook.select()) == 0:
-                # event.delta is positive for scroll up, negative for down (Windows/Mac)
-                # For Linux, event.num == 4/5; we handle both via unified delta logic
-                return "break"
-            if hasattr(event, 'delta'):
+            # Only scroll when the Live Status tab (index 0) is active
+            if self.notebook.index(self.notebook.select()) != 0:
+                return
+            if hasattr(event, 'delta') and event.delta:
+                # Windows / macOS: delta is ±120 per notch
                 scroll_units = int(-1 * (event.delta / 120))
             else:
-                # Linux Button-4 (up) -> -1, Button-5 (down) -> +1
+                # Linux: Button-4 = scroll up (-1), Button-5 = scroll down (+1)
                 scroll_units = -1 if event.num == 4 else 1
-                self.live_canvas.yview_scroll(scroll_units, "units")
+            self.live_canvas.yview_scroll(scroll_units, "units")
             return "break"   # Prevent other widgets from also scrolling
 
         # Bind to the entire application window (makes it work even if mouse is over a treeview)
@@ -755,18 +754,8 @@ class CoachView(tk.Frame):
         if target_intervals is None:
             return
 
-        start_mode_input = simpledialog.askstring(
-            "Pre-Config: Start Mode",
-            "Start mode (INDIVIDUAL or GROUP):",
-            parent=self.parent,
-            initialvalue=current_mode,
-        )
-        if start_mode_input is None:
-            return
-
-        start_mode = start_mode_input.strip().upper() or "INDIVIDUAL"
-        if start_mode not in {"INDIVIDUAL", "GROUP"}:
-            messagebox.showerror("Invalid Start Mode", "Use INDIVIDUAL or GROUP")
+        start_mode = self._ask_start_mode(current_mode)
+        if start_mode is None:
             return
 
         if not workout or workout.status == WorkoutState.COMPLETED:
@@ -809,6 +798,57 @@ class CoachView(tk.Frame):
             f"Start mode: {start_mode}"
         )
         self._update_status_badge("✓ Config Saved", ModernTheme.SUCCESS)
+
+    def _ask_start_mode(self, current_mode: str):
+        """Small dialog with Individual / Group radio buttons. Returns 'INDIVIDUAL', 'GROUP', or None."""
+        dialog = tk.Toplevel(self.parent)
+        dialog.title("Pre-Config: Start Mode")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        ModernTheme.configure(dialog)
+
+        result = [None]
+        # Scope the StringVar to the dialog Toplevel so ttk widgets can bind it reliably
+        var = tk.StringVar(master=dialog, value=current_mode.upper() if current_mode else "INDIVIDUAL")
+        # selected_mode mirrors var and is updated via command= so we never rely on
+        # StringVar propagation alone (it can silently break inside nested frames)
+        selected_mode = [var.get()]
+
+        def _make_select(v):
+            def _select():
+                selected_mode[0] = v
+            return _select
+
+        ttk.Label(
+            dialog,
+            text="How should intervals be started?",
+            style="Body.TLabel",
+        ).pack(padx=28, pady=(20, 14))
+
+        radio_frame = ttk.Frame(dialog, style="Glass.TFrame")
+        radio_frame.pack(padx=28, pady=(0, 20))
+
+        for col, (label, value, hint) in enumerate([
+            ("Individual", "INDIVIDUAL", "Each runner starts on their own"),
+            ("Group", "GROUP", "All selected runners start together"),
+        ]):
+            cell = ttk.Frame(radio_frame, style="Surface.TFrame", padding=(14, 10))
+            cell.grid(row=0, column=col, padx=8)
+            ttk.Radiobutton(cell, text=label, variable=var, value=value,
+                            command=_make_select(value)).pack(anchor=tk.W)
+            ttk.Label(cell, text=hint, style="Tip.TLabel", wraplength=140).pack(anchor=tk.W, pady=(4, 0))
+
+        def _ok():
+            result[0] = selected_mode[0]
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog, style="GlassHighlight.TFrame")
+        btn_frame.pack(fill=tk.X, padx=28, pady=(0, 20))
+        ttk.Button(btn_frame, text="OK", command=_ok, style="Success.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side=tk.LEFT)
+
+        dialog.wait_window()
+        return result[0]
 
     def _on_open_selected_runner(self):
         runner_id = self._get_selected_runner_id()
