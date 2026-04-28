@@ -29,6 +29,10 @@ from gui.timestamp_editor_view import TimestampEditorView
 
 from application.workout_repo import save_workout_summary, StorageThresholdWarning
 from gui.workout_repo_page import WorkoutRepoPage
+from externalInterface.workout_summary_pdf import WorkoutSummaryPdfGenerator
+from tkinter import filedialog
+from pathlib import Path
+import json
 
 
 class CoachView(tk.Frame):
@@ -53,6 +57,7 @@ class CoachView(tk.Frame):
         load_roster_uc=None,
         edit_timestamp_uc=None,
         undo_last_edit_uc=None,
+        group_start_uc=None,
         refresh_interval_ms: int = 1000,
         **kwargs
     ):
@@ -86,6 +91,7 @@ class CoachView(tk.Frame):
         self.last_analytics_update_at = 0.0
         self.last_analytics_signature = None
         self._cached_analytics_workout_id = None
+        self.group_start_uc = group_start_uc
         self._cached_runner_analytics = None
         self._cached_workout_stats = None
 
@@ -281,11 +287,23 @@ class CoachView(tk.Frame):
         self.live_content.bind("<Configure>", lambda e: self.live_canvas.configure(scrollregion=self.live_canvas.bbox("all")))
         self.live_canvas.bind("<Configure>", _sync_live_scrollregion)
 
-        def _on_live_mousewheel(event):
-            if event.delta:
-                self.live_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        def _on_live_tab_mousewheel(event):
+            # Only scroll when the Live Status tab (index 0) is active
+            if self.notebook.index(self.notebook.select()) != 0:
+                return
+            if hasattr(event, 'delta') and event.delta:
+                # Windows / macOS: delta is ±120 per notch
+                scroll_units = int(-1 * (event.delta / 120))
+            else:
+                # Linux: Button-4 = scroll up (-1), Button-5 = scroll down (+1)
+                scroll_units = -1 if event.num == 4 else 1
+            self.live_canvas.yview_scroll(scroll_units, "units")
+            return "break"   # Prevent other widgets from also scrolling
 
-        self.live_canvas.bind_all("<MouseWheel>", _on_live_mousewheel)
+        # Bind to the entire application window (makes it work even if mouse is over a treeview)
+        self.parent.bind_all("<MouseWheel>", _on_live_tab_mousewheel)
+        self.parent.bind_all("<Button-4>", _on_live_tab_mousewheel)   # Linux scroll up
+        self.parent.bind_all("<Button-5>", _on_live_tab_mousewheel)   # Linux scroll down
 
         # Live Status Tab content with proper spacing
         # Running athletes section
@@ -315,7 +333,7 @@ class CoachView(tk.Frame):
         running_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.running_tree.bind("<Double-1>", self._on_running_row_double_click)
         # Mouse wheel scroll for running_tree
-        self._bind_mousewheel(self.running_tree, running_scrollbar)
+        #self._bind_mousewheel(self.running_tree, running_scrollbar)
 
         # Resting athletes section
         resting_section = ttk.LabelFrame(self.live_content, text="😴 Resting Athletes", style="Card.TLabelframe")
@@ -342,7 +360,7 @@ class CoachView(tk.Frame):
         resting_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.resting_tree.bind("<Double-1>", self._on_resting_row_double_click)
         # Mouse wheel scroll for resting_tree
-        self._bind_mousewheel(self.resting_tree, resting_scrollbar)
+        #self._bind_mousewheel(self.resting_tree, resting_scrollbar)
 
         # Finished athletes section
         finished_section = ttk.LabelFrame(self.live_content, text="✅ Finished Athletes", style="Card.TLabelframe")
@@ -373,9 +391,10 @@ class CoachView(tk.Frame):
         finished_scrollbar = ttk.Scrollbar(finished_container, orient=tk.VERTICAL, command=self.finished_tree.yview)
         self.finished_tree.configure(yscrollcommand=finished_scrollbar.set)
         self.finished_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.finished_tree.bind("<Double-1>", self._on_finished_row_double_click)
         finished_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         # Mouse wheel scroll for finished_tree
-        self._bind_mousewheel(self.finished_tree, finished_scrollbar)
+        #self._bind_mousewheel(self.finished_tree, finished_scrollbar)
 
         # Status tip
         ttk.Label(self.live_content, text="💡 Tip: Double-click any runner to open their personal dashboard. Runner windows auto-open when athletes start running.", 
@@ -426,7 +445,7 @@ class CoachView(tk.Frame):
         self.runner_list_scrollbar = ttk.Scrollbar(self.runner_list_frame, orient=tk.VERTICAL)
         self.runner_tree = ttk.Treeview(
             self.runner_list_frame,
-            columns=("first_name", "last_name"),
+            columns=("first_name",),
             show="headings",
             selectmode="browse",
             height=20,
@@ -434,9 +453,7 @@ class CoachView(tk.Frame):
         )
         self.runner_list_scrollbar.config(command=self.runner_tree.yview)
         self.runner_tree.heading("first_name", text="First Name")
-        self.runner_tree.heading("last_name", text="Last Name")
         self.runner_tree.column("first_name", width=100)
-        self.runner_tree.column("last_name", width=100)
         self.runner_tree.pack(side=tk.LEFT, fill=tk.Y, expand=True)
         self.runner_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.runner_tree.bind("<<TreeviewSelect>>", self._on_runner_selected)
@@ -451,7 +468,7 @@ class CoachView(tk.Frame):
         self.runner_detail_canvas.configure(yscrollcommand=self.runner_detail_scrollbar.set)
         self.runner_detail_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.runner_detail_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.runner_detail_frame = ttk.Frame(self.runner_detail_canvas)
+        self.runner_detail_frame = ttk.Frame(self.runner_detail_canvas, style="Surface.TFrame")
         self.runner_detail_id = self.runner_detail_canvas.create_window((0, 0), window=self.runner_detail_frame, anchor="nw")
 
         def _sync_runner_detail_scrollregion(event):
@@ -462,13 +479,23 @@ class CoachView(tk.Frame):
         self.runner_detail_canvas.bind("<Configure>", _sync_runner_detail_scrollregion)
 
         # Mousewheel handler for runner_detail_canvas (bind only after attribute exists)
-        def _on_runner_detail_mousewheel(event):
-            if event.num == 4 or event.delta > 0:
-                self.runner_detail_canvas.yview_scroll(-1, "units")
-            elif event.num == 5 or event.delta < 0:
-                self.runner_detail_canvas.yview_scroll(1, "units")
+        def _scroll_runner_detail(event):
+            if hasattr(event, 'delta'):
+                scroll_units = int(-1 * (event.delta / 120))
+            else:
+                scroll_units = -1 if event.num == 4 else 1
+            self.runner_detail_canvas.yview_scroll(scroll_units, "units")
             return "break"
-        self.runner_detail_canvas.bind_all("<MouseWheel>", _on_runner_detail_mousewheel)
+
+        self.runner_detail_canvas.bind("<MouseWheel>", _scroll_runner_detail)
+        self.runner_detail_canvas.bind("<Button-4>", _scroll_runner_detail)
+        self.runner_detail_canvas.bind("<Button-5>", _scroll_runner_detail)
+
+    def _on_finished_row_double_click(self, event):
+        item_id = self.finished_tree.identify_row(event.y)
+        if item_id and item_id.startswith("finished-"):
+            runner_id = int(item_id.split("-", 1)[1])
+            self._open_runner_detail(runner_id)
 
     def _bind_mousewheel(self, widget, scrollbar):
         # Cross-platform mousewheel binding for Treeview widgets
@@ -727,18 +754,8 @@ class CoachView(tk.Frame):
         if target_intervals is None:
             return
 
-        start_mode_input = simpledialog.askstring(
-            "Pre-Config: Start Mode",
-            "Start mode (INDIVIDUAL or GROUP):",
-            parent=self.parent,
-            initialvalue=current_mode,
-        )
-        if start_mode_input is None:
-            return
-
-        start_mode = start_mode_input.strip().upper() or "INDIVIDUAL"
-        if start_mode not in {"INDIVIDUAL", "GROUP"}:
-            messagebox.showerror("Invalid Start Mode", "Use INDIVIDUAL or GROUP")
+        start_mode = self._ask_start_mode(current_mode)
+        if start_mode is None:
             return
 
         if not workout or workout.status == WorkoutState.COMPLETED:
@@ -782,12 +799,66 @@ class CoachView(tk.Frame):
         )
         self._update_status_badge("✓ Config Saved", ModernTheme.SUCCESS)
 
+    def _ask_start_mode(self, current_mode: str):
+        """Small dialog with Individual / Group radio buttons. Returns 'INDIVIDUAL', 'GROUP', or None."""
+        dialog = tk.Toplevel(self.parent)
+        dialog.title("Pre-Config: Start Mode")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        ModernTheme.configure(dialog)
+
+        result = [None]
+        # Scope the StringVar to the dialog Toplevel so ttk widgets can bind it reliably
+        var = tk.StringVar(master=dialog, value=current_mode.upper() if current_mode else "INDIVIDUAL")
+        # selected_mode mirrors var and is updated via command= so we never rely on
+        # StringVar propagation alone (it can silently break inside nested frames)
+        selected_mode = [var.get()]
+
+        def _make_select(v):
+            def _select():
+                selected_mode[0] = v
+            return _select
+
+        ttk.Label(
+            dialog,
+            text="How should intervals be started?",
+            style="Body.TLabel",
+        ).pack(padx=28, pady=(20, 14))
+
+        radio_frame = ttk.Frame(dialog, style="Glass.TFrame")
+        radio_frame.pack(padx=28, pady=(0, 20))
+
+        for col, (label, value, hint) in enumerate([
+            ("Individual", "INDIVIDUAL", "Each runner starts on their own"),
+            ("Group", "GROUP", "All selected runners start together"),
+        ]):
+            cell = ttk.Frame(radio_frame, style="Surface.TFrame", padding=(14, 10))
+            cell.grid(row=0, column=col, padx=8)
+            ttk.Radiobutton(cell, text=label, variable=var, value=value,
+                            command=_make_select(value)).pack(anchor=tk.W)
+            ttk.Label(cell, text=hint, style="Tip.TLabel", wraplength=140).pack(anchor=tk.W, pady=(4, 0))
+
+        def _ok():
+            result[0] = selected_mode[0]
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog, style="GlassHighlight.TFrame")
+        btn_frame.pack(fill=tk.X, padx=28, pady=(0, 20))
+        ttk.Button(btn_frame, text="OK", command=_ok, style="Success.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side=tk.LEFT)
+
+        dialog.wait_window()
+        return result[0]
+
     def _on_open_selected_runner(self):
         runner_id = self._get_selected_runner_id()
         if runner_id is None:
-            messagebox.showinfo("Open Runner", "Select a runner from either the running or resting list.")
+            runner_id = self._get_selected_finished_runner_id()
+        if runner_id is None:
+            messagebox.showinfo("Open Runner", "Select a runner from the running, resting, or finished list.")
         else:
             self._open_runner_detail(runner_id)
+          
 
     def _on_edit_timestamps(self):
         if self.edit_timestamp_uc is None:
@@ -1096,11 +1167,7 @@ class CoachView(tk.Frame):
         self.runner_tree.delete(*self.runner_tree.get_children())
         self._runner_analytics_map = {}
         for runner in sorted(analytics, key=lambda a: a.runner_name):
-            # Split name for display (assume 'First Last' or similar)
-            name_parts = runner.runner_name.split()
-            first = name_parts[0] if name_parts else runner.runner_name
-            last = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-            self.runner_tree.insert("", tk.END, iid=str(runner.runner_id), values=(first, last))
+            self.runner_tree.insert("", tk.END, iid=str(runner.runner_id), values=(runner.runner_name,))
             self._runner_analytics_map[str(runner.runner_id)] = runner
         # Clear detail view
         for w in self.runner_detail_frame.winfo_children():
@@ -1125,12 +1192,17 @@ class CoachView(tk.Frame):
         ttk.Label(self.runner_detail_frame, text=f"Intervals: {len(runner.intervals)}   Avg Pace: {pace_text}", style="Body.TLabel").pack(anchor=tk.W, pady=(0, 8))
 
         # Pace trend chart
-        fig = plot_pace_trend_for_single(runner)
-        canvas = FigureCanvasTkAgg(fig, master=self.runner_detail_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self.figures.append(fig)
-        self.canvas_widgets.append(canvas)
+        if runner.intervals:
+            fig = plot_pace_trend_for_single(runner)
+            canvas = FigureCanvasTkAgg(fig, master=self.runner_detail_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            self.figures.append(fig)
+            self.canvas_widgets.append(canvas)
+        else:
+            ttk.Label(self.runner_detail_frame, 
+                      text="No interval data available for this runner.\n\n(The runner may not have started any intervals.)",
+                      style="Caption.TLabel", justify="center").pack(pady=20, fill=tk.X)
 
         # Interval/split table
         table_frame = ttk.Frame(self.runner_detail_frame)
@@ -1284,6 +1356,16 @@ class CoachView(tk.Frame):
             started = self.start_workout_uc.execute(self.current_workout_id)
             if not started:
                 raise RuntimeError("Workout start was blocked by the current workout state.")
+            if workout.startMode.upper() == "GROUP" and self.group_start_uc:
+                try:
+                    ready, active, resting = self.group_start_uc.execute(self.current_workout_id)
+                    self._flash_status_message(f"Group start: {ready} runners started", ModernTheme.SUCCESS, 3000)
+                    # Force immediate refresh of running table
+                    self._poll()
+                    # Also force the running tree to rebuild now
+                    self.update_idletasks()
+                except Exception as e:
+                    self._flash_status_message(f"Group start error: {str(e)}", ModernTheme.WARNING, 3000)
 
             self.workout_active = True
 
@@ -1351,6 +1433,45 @@ class CoachView(tk.Frame):
                     messagebox.showwarning("Storage Limit Warning", str(warn))
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save workout summary: {e}")
+                
+                # --- Ask user where to export a copy of the JSON ---
+              
+
+                default_json_name = f"{workout_name}.json"
+                json_path = filedialog.asksaveasfilename(
+                    defaultextension=".json",
+                    filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                    initialfile=default_json_name,
+                    title="Export JSON (raw workout data) – optional, click Cancel to skip"
+                )
+                if json_path:
+                    try:
+                        with open(json_path, "w", encoding="utf-8") as f:
+                            json.dump(summary_dict, f, indent=2)
+                        self._flash_status_message(f"JSON exported to {Path(json_path).name}", ModernTheme.SUCCESS, 3000)
+                    except Exception as e:
+                        messagebox.showerror("Export Error", f"Failed to export JSON:\n{e}")
+                else:
+                    self._flash_status_message("JSON export skipped", ModernTheme.WARNING, 2000)
+
+
+                # --- Ask user where to save the PDF summary ---
+                pdf_gen = WorkoutSummaryPdfGenerator()
+                default_pdf_name = f"{workout_name}.pdf"
+                pdf_path = filedialog.asksaveasfilename(
+                    defaultextension=".pdf",
+                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                    initialfile=default_pdf_name,
+                    title="Save PDF (readable summary) – optional, click Cancel to skip"
+                )
+                if pdf_path:
+                    try:
+                        pdf_gen.generate(summary_dict, Path(pdf_path))
+                        self._flash_status_message(f"PDF saved to {Path(pdf_path).name}", ModernTheme.SUCCESS, 3000)
+                    except Exception as pdf_err:
+                        messagebox.showerror("PDF Error", f"Failed to save PDF:\n{pdf_err}")
+                else:
+                    self._flash_status_message("PDF export skipped", ModernTheme.WARNING, 2000)
 
                 # Update button states
                 self.btn_start.config(state=tk.NORMAL, text="▶ Start Workout")
@@ -1503,7 +1624,7 @@ class CoachView(tk.Frame):
             self._update_status_badge("Load Failed", ModernTheme.DANGER)
 
     def _on_generate_pdf_reports(self):
-        """Generate PDF reports for all runners in the workout."""
+        """Generate PDF reports for all runners – user chooses output folder."""
         try:
             if not self.generate_report_uc:
                 messagebox.showerror("Error", "Report generation is not configured")
@@ -1525,10 +1646,17 @@ class CoachView(tk.Frame):
                 if not result:
                     return
 
-            generated_files = self.generate_report_uc.execute(workout)
+            # Ask user for output directory
+            output_dir = filedialog.askdirectory(
+                title="Select Folder to Save PDF Reports"
+            )
+            if not output_dir:
+                self._flash_status_message("PDF generation cancelled", ModernTheme.WARNING, 2000)
+                return
+
+            generated_files = self.generate_report_uc.execute(workout, output_dir=Path(output_dir))
             
             if generated_files:
-                output_dir = generated_files[0].resolve().parent
                 messagebox.showinfo("Success", 
                     f"Generated {len(generated_files)} PDF reports in:\n{output_dir}")
                 self._update_status_badge(f"✓ {len(generated_files)} PDFs", ModernTheme.SUCCESS)

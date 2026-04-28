@@ -131,7 +131,8 @@ def create_nfc_adapter(tags: Optional[list[str]] = None) -> ReaderHardwareQueueA
     """Create a bridge adapter backed by NFC hardware or a lightweight simulator."""
 
     event_q: queue.Queue = queue.Queue()
-    simulate_nfc = os.getenv("NFC_SIMULATOR", "1").lower() not in {"0", "false", "no"}
+    # For external/beta release: default to real hardware unless explicitly overridden
+    simulate_nfc = os.getenv("NFC_SIMULATOR", "0").lower() not in {"0", "false", "no"}
 
     if simulate_nfc:
         configured_tags = [
