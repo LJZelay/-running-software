@@ -1,7 +1,19 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+from datetime import datetime
 
 from gui.theme import ModernTheme
+
+
+def _fmt_ts(ts_raw: str) -> str:
+    """Return a human-friendly timestamp string, or '—' if empty/unparseable."""
+    if not ts_raw:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(ts_raw)
+        return dt.strftime("%b %d, %Y  %I:%M:%S %p")
+    except Exception:
+        return ts_raw
 
 
 class TimestampEditorView(tk.Toplevel):
@@ -28,6 +40,8 @@ class TimestampEditorView(tk.Toplevel):
         self.runner_session = runner_session
         self.runner_id = runner_session.runner.id
 
+        self._raw_timestamps: dict[str, str] = {}
+
         self.title(f"Edit Timestamps - {runner_session.runner.name}")
         self.geometry("760x560")
         ModernTheme.configure(self)
@@ -46,9 +60,9 @@ class TimestampEditorView(tk.Toplevel):
         ttk.Label(
             self,
             text=(
-                "Use this tool to manually correct timestamps that the hardware "
-                "recorded incorrectly. Enter new timestamps in ISO 8601 format "
-                "(e.g., 2026-02-08T10:00:05)."
+                "Actions are listed in chronological order. "
+                "Double-click any row (or select it and press Edit Selected) to correct its timestamp. "
+                "Enter the new time in ISO 8601 format, e.g. 2026-02-08T10:00:05."
             ),
             style="Tip.TLabel",
             wraplength=720,
@@ -57,20 +71,14 @@ class TimestampEditorView(tk.Toplevel):
         container = ttk.Frame(self, style="Card.TFrame", padding=(16, 12))
         container.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
 
-        columns = ("kind", "index", "field", "lap", "timestamp")
+        columns = ("description", "timestamp")
         self.tree = ttk.Treeview(
             container, columns=columns, show="headings", style="Treeview"
         )
-        self.tree.heading("kind", text="Kind")
-        self.tree.heading("index", text="Index")
-        self.tree.heading("field", text="Field")
-        self.tree.heading("lap", text="Lap")
-        self.tree.heading("timestamp", text="Timestamp (ISO 8601)")
-        self.tree.column("kind", width=90, minwidth=70)
-        self.tree.column("index", width=70, minwidth=60)
-        self.tree.column("field", width=80, minwidth=60)
-        self.tree.column("lap", width=70, minwidth=50)
-        self.tree.column("timestamp", width=400, minwidth=220)
+        self.tree.heading("description", text="Action")
+        self.tree.heading("timestamp", text="Time")
+        self.tree.column("description", width=280, minwidth=180)
+        self.tree.column("timestamp", width=380, minwidth=200)
 
         scrollbar = ttk.Scrollbar(
             container, orient=tk.VERTICAL, command=self.tree.yview
@@ -125,59 +133,52 @@ class TimestampEditorView(tk.Toplevel):
     def _populate_tree(self):
         self._reload_runner_session()
         self.tree.delete(*self.tree.get_children())
+        self._raw_timestamps = {}
+
+        # Collect every event as (raw_ts, iid, description)
+        events: list[tuple[str, str, str]] = []
 
         for interval in self.runner_session.intervals:
-            interval_number = interval.get("intervalNumber")
-            self.tree.insert(
-                "",
-                tk.END,
-                iid=f"interval|{interval_number}|start|",
-                values=(
-                    "interval",
-                    interval_number,
-                    "start",
-                    "",
-                    interval.get("start") or "",
-                ),
-            )
+            n = interval.get("intervalNumber")
+            events.append((
+                interval.get("start") or "",
+                f"interval|{n}|start|",
+                f"Interval {n} — Start",
+            ))
             for i, lap_ts in enumerate(interval.get("laps", [])):
-                self.tree.insert(
-                    "",
-                    tk.END,
-                    iid=f"interval|{interval_number}|lap|{i}",
-                    values=(
-                        "interval",
-                        interval_number,
-                        "lap",
-                        i + 1,
-                        lap_ts or "",
-                    ),
-                )
-            self.tree.insert(
-                "",
-                tk.END,
-                iid=f"interval|{interval_number}|end|",
-                values=(
-                    "interval",
-                    interval_number,
-                    "end",
-                    "",
-                    interval.get("end") or "",
-                ),
-            )
+                events.append((
+                    lap_ts or "",
+                    f"interval|{n}|lap|{i}",
+                    f"Interval {n} — Lap {i + 1}",
+                ))
+            events.append((
+                interval.get("end") or "",
+                f"interval|{n}|end|",
+                f"Interval {n} — End",
+            ))
 
         for i, rest in enumerate(self.runner_session.rests):
+            events.append((
+                rest.get("start") or "",
+                f"rest|{i}|start|",
+                f"Rest {i + 1} — Start",
+            ))
+            events.append((
+                rest.get("end") or "",
+                f"rest|{i}|end|",
+                f"Rest {i + 1} — End",
+            ))
+
+        # Sort chronologically; rows with no timestamp fall to the bottom
+        events.sort(key=lambda e: e[0] if e[0] else "9999")
+
+        for ts_raw, iid, description in events:
+            self._raw_timestamps[iid] = ts_raw
             self.tree.insert(
                 "",
                 tk.END,
-                iid=f"rest|{i}|start|",
-                values=("rest", i, "start", "", rest.get("start") or ""),
-            )
-            self.tree.insert(
-                "",
-                tk.END,
-                iid=f"rest|{i}|end|",
-                values=("rest", i, "end", "", rest.get("end") or ""),
+                iid=iid,
+                values=(description, _fmt_ts(ts_raw)),
             )
 
     def _on_edit_selected(self):
@@ -201,10 +202,7 @@ class TimestampEditorView(tk.Toplevel):
             )
             return
 
-        current_values = self.tree.item(iid, "values")
-        current_timestamp = (
-            current_values[4] if len(current_values) >= 5 else ""
-        )
+        current_timestamp = self._raw_timestamps.get(iid, "")
 
         label = f"{kind} {index} {field}"
         if lap_index is not None:
