@@ -63,6 +63,10 @@ class RunnerView(tk.Toplevel):
                   command=self._request_coach, style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="🔄 Refresh",
                   command=self._refresh, style="Secondary.TButton").pack(side=tk.LEFT)
+        
+        # Create Notebook (tabs)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
 
         # Main content with glass-style styling
         self.main = ttk.Frame(self, style="Glass.TFrame", padding=(20, 16))
@@ -87,6 +91,16 @@ class RunnerView(tk.Toplevel):
         self.lap_label = ttk.Label(stats_frame, text=f"{self.lap_count}", style="Body.TLabel")
         self.lap_label.grid(row=1, column=1, sticky="w", padx=(24, 0))
 
+        # Average Pace Label
+        ttk.Label(stats_frame, text="Average Pace", style="Subheader.TLabel").grid(row=0, column=2, sticky="w", padx=(24, 0), pady=(0, 4))
+        self.pace_label = ttk.Label(stats_frame, text="-- s/km", style="Body.TLabel")
+        self.pace_label.grid(row=1, column=2, sticky="w", padx=(24, 0))
+
+        # NEW: Interval progress (optional)
+        ttk.Label(stats_frame, text="Intervals Done", style="Subheader.TLabel").grid(row=0, column=3, sticky="w", padx=(24, 0), pady=(0, 4))
+        self.interval_label = ttk.Label(stats_frame, text="0", style="Body.TLabel")
+        self.interval_label.grid(row=1, column=3, sticky="w", padx=(24, 0))
+
         # Feedback message
         self.feedback = ttk.Label(self.main, text="Ready for action", style="Caption.TLabel", wraplength=500)
         self.feedback.pack(anchor=tk.W, pady=(0, 16))
@@ -98,6 +112,45 @@ class RunnerView(tk.Toplevel):
 
         self.fig = None
         self.canvas = None
+
+         # ==================== TAB 2: Profile ====================
+        self.profile_frame = ttk.Frame(self.notebook, style="Glass.TFrame", padding=(20, 16))
+        self.notebook.add(self.profile_frame, text="👤 Profile")
+
+        def add_profile_row(parent, label_text, value_text, row):
+            ttk.Label(parent, text=label_text, style="Subheader.TLabel").grid(row=row, column=0, sticky="w", pady=6, padx=(0, 16))
+            ttk.Label(parent, text=value_text, style="Body.TLabel").grid(row=row, column=1, sticky="w", pady=6)
+
+        # Full name
+        add_profile_row(self.profile_frame, "Full Name:", self.runner.name, 0)
+
+        # Email
+        email = getattr(self.runner, 'email', 'N/A')
+        if not email or email.strip() == "":
+            email = "Not provided"
+        add_profile_row(self.profile_frame, "Email:", email, 1)
+
+        # Address – not in domain yet
+        address = getattr(self.runner, 'address', None)
+        if address is None:
+            address = "Not available (add 'address' field to Runner)"
+        elif not address.strip():
+            address = "Not provided"
+        add_profile_row(self.profile_frame, "Address:", address, 2)
+
+        # RFID tag
+        rfid = getattr(self.runner, 'rfid_tag', 'N/A')
+        if not rfid or rfid.strip() == "":
+            rfid = "Not assigned"
+        add_profile_row(self.profile_frame, "RFID Tag:", rfid, 3)
+
+        # NFC tag
+        nfc = getattr(self.runner, 'nfc_tag', 'N/A')
+        if not nfc or nfc.strip() == "":
+            nfc = "Not assigned"
+        add_profile_row(self.profile_frame, "NFC Tag:", nfc, 4)
+
+        ttk.Label(self.profile_frame, text="ℹ️ Contact info can be updated in the roster CSV.", style="Caption.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(20, 0))
 
     def _start_polling(self):
         self._poll()
@@ -120,6 +173,20 @@ class RunnerView(tk.Toplevel):
             analytics = self.get_runner_analytics_uc.execute(self.workout_id)
             my_analytics = next((a for a in analytics if a.runner_id == self.runner_id), None)
             if my_analytics:
+                # MODIFIED: Compute total laps from all intervals
+                total_laps = sum(len(interval.splits_ms) for interval in my_analytics.intervals)
+                self.lap_label.config(text=str(total_laps))
+                # Update intervals done
+                intervals_done = len(my_analytics.intervals)
+                self.interval_label.config(text=str(intervals_done))
+                # Update average pace
+                avg_pace = my_analytics.overall_avg_pace
+                if avg_pace is not None:
+                    self.pace_label.config(text=f"{avg_pace:.1f}")
+                else:
+                    self.pace_label.config(text="--")
+
+                # Update chart
                 if self.fig is None:
                     self.fig = plot_pace_trend_for_single(my_analytics)
                     self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
@@ -129,8 +196,15 @@ class RunnerView(tk.Toplevel):
                     self.fig.clear()
                     self.fig = plot_pace_trend_for_single(my_analytics, fig=self.fig)
                     self.canvas.draw()
-        except:
+            else:
+                # No analytics yet – reset display
+                self.lap_label.config(text="0")
+                self.interval_label.config(text="0")
+                self.pace_label.config(text="--")
+        except Exception as e:
+            # Silently ignore; avoid spamming console
             pass
+                
 
     def _simulate_lap(self):
         """Record a lap with visual feedback following Apple's feedback principle."""
@@ -141,10 +215,9 @@ class RunnerView(tk.Toplevel):
                     self.runner.rfid_tag,
                     datetime.now().isoformat()
                 )
-            self.lap_count += 1
-            self.lap_label.config(text=f"{self.lap_count}")
-            self.feedback.config(text=f"Lap {self.lap_count} recorded at {datetime.now().strftime('%H:%M:%S')}", style="Body.TLabel")
-            # Visual feedback - temporarily highlight the lap count
+                # MODIFIED: Do NOT increment lap count manually – rely on next poll to update based on actual data
+            self.feedback.config(text=f"Lap recorded at {datetime.now().strftime('%H:%M:%S')}", style="Body.TLabel")
+            # Visual feedback - temporarily highlight the lap label
             self._flash_feedback(self.lap_label, ModernTheme.SUCCESS)
         except Exception as e:
             self.feedback.config(text=f"Error: {str(e)[:40]}", style="Caption.TLabel")

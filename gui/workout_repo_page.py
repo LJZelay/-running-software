@@ -16,6 +16,8 @@ class WorkoutRepoPage(tk.Toplevel):
     def _setup_ui(self):
         self.workouts = list_workouts()
         self.selected_id = None
+        
+        # Title at top
         label = ttk.Label(self, text="Saved Workouts", font=("Arial", 16, "bold"))
         label.pack(pady=12)
 
@@ -24,21 +26,26 @@ class WorkoutRepoPage(tk.Toplevel):
             empty_label.pack(pady=24)
             return
 
-        # --- Treeview (list of workouts) with scrollbar ---
-        tree_frame = ttk.Frame(self)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        # --- Main PanedWindow (horizontal split) ---
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
 
-        tree_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        # ---- LEFT PANE: Treeview with scrollbar ----
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=1)  # weight=1 allows resizing
+
+        tree_scroll = ttk.Scrollbar(left_frame, orient=tk.VERTICAL)
         self.tree = ttk.Treeview(
-            tree_frame, columns=("name", "date"), show="headings",
+            left_frame, columns=("name", "date"), show="headings",
             selectmode="browse", yscrollcommand=tree_scroll.set
         )
         tree_scroll.config(command=self.tree.yview)
         self.tree.heading("name", text="Name")
         self.tree.heading("date", text="Date")
-        self.tree.column("name", width=280)
-        self.tree.column("date", width=200)
+        self.tree.column("name", width=200)
+        self.tree.column("date", width=150)
 
+        # Insert workout items
         for w in self.workouts:
             name = w.get("name", "")
             if not name or name.strip() == "":
@@ -52,18 +59,21 @@ class WorkoutRepoPage(tk.Toplevel):
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind("<Double-1>", self._on_select)
 
-        # --- Details area (text widget) with scrollbar ---
-        details_frame = ttk.Frame(self)
-        details_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        # ---- RIGHT PANE: Text widget with scrollbar ----
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=1)  # weight=1 gives equal space
 
-        self.details = tk.Text(details_frame, height=12, state="disabled",
+        self.details = tk.Text(right_frame, height=12, state="disabled",
                                wrap="word", font=("Arial", 10))
-        details_scroll = ttk.Scrollbar(details_frame, orient=tk.VERTICAL,
+        details_scroll = ttk.Scrollbar(right_frame, orient=tk.VERTICAL,
                                        command=self.details.yview)
         self.details.configure(yscrollcommand=details_scroll.set)
 
         self.details.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         details_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        status_label = ttk.Label(self, text="Double-click a workout to view details", font=("Arial", 9))
+        status_label.pack(side=tk.BOTTOM, pady=4)
 
     def _on_select(self, event):
         item = self.tree.focus()
