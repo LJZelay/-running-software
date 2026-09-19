@@ -1,11 +1,4 @@
-# CSE 4504 Team Project (Team 4)
-
-## Team
-
-- Lesly
-- Joel
-- Cliff
-- La'Mia 
+#runnning software
 
 ## What you need
 
