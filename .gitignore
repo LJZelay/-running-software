@@ -157,6 +157,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Java integration QA build output
+qa-java/out/
+
 # Spyder project settings
 .spyderproject
 .spyproject
